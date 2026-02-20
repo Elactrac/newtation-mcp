@@ -34,7 +34,7 @@ This MCP server gives Claude 5 brand intelligence tools to audit your AI presenc
 ### Step 1 — Clone this repo
 
 ```bash
-git clone https://github.com/krish-pamnani/newtation-mcp.git
+git clone https://github.com/Elactrac/newtation-mcp.git
 cd newtation-mcp
 ```
 
