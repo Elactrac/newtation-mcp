@@ -1,0 +1,5 @@
+# Copy this file to .dev.vars and fill in your GitHub OAuth credentials
+# These are used for LOCAL development only
+GITHUB_CLIENT_ID=your_development_github_client_id
+GITHUB_CLIENT_SECRET=your_development_github_client_secret
+COOKIE_ENCRYPTION_KEY=generate_with_openssl_rand_hex_32
