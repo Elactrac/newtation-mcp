@@ -232,7 +232,7 @@ AI models build an internal representation (entity) of every brand they've encou
 - [ ] **Schema Markup** — Add \`Organization\` schema with \`@id\`, \`name\`, \`url\`, \`description\`, \`founder\`
 - [ ] **Wikipedia / Wikidata** — If eligible, create or claim your entry
 - [ ] **Crunchbase / LinkedIn** — Ensure company profiles are complete and consistent
-- [ ] **Outreach Targets** — Run `citation_outreach_targets` to find sites that could cite you
+- [ ] **Outreach Targets** — Run \`citation_outreach_targets\` to find sites that could cite you
 - [ ] **Press mentions** — Earn coverage that describes you in your own language
 - [ ] **Interview content** — Founder interviews create rich entity signals
 
