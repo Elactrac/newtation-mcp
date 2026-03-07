@@ -781,7 +781,7 @@ ${rows}
 **Timeline**: 3-8 weeks from pitch to publish
 
 ### Outreach Template (Customize per target)
-```
+\`\`\`
 Subject: [Specific Value] for [Site Name] Audience
 
 Hi [Name],
@@ -801,7 +801,7 @@ Happy to adjust to what works best for your editorial calendar.
 
 Best,
 [Your Name]
-```
+\`\`\`
 
 ### Tracking Your Outreach
 For each target, track:
