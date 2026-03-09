@@ -10,9 +10,11 @@
 
 ## Description
 
-Newtation is an AI presence management tool that helps brands understand and improve how AI models talk about them. It connects to Claude as a remote MCP server and provides 12 read-only auditing tools — covering perception, citations, competitive positioning, sentiment, content strategy, and more.
+Newtation is an AI presence management platform that helps brands understand and improve how AI models talk about them. It connects to Claude as a remote MCP server and provides **15 read-only auditing tools** and **4 prompt workflows** — covering perception, citations, competitive positioning, sentiment, hallucination detection, schema markup generation, and more.
 
-All tools are **read-only**. They generate structured reports based on your brand inputs. Nothing is modified, no external APIs are called, and no data is stored beyond the authenticated session.
+All tools are **read-only**. They combine two approaches:
+1. **Structured analysis frameworks** the LLM fills in using its actual training-data knowledge
+2. **Computed artifacts** — real query sets, JSON-LD code, and verification matrices generated algorithmically
 
 ---
 
@@ -20,11 +22,13 @@ All tools are **read-only**. They generate structured reports based on your bran
 
 - **Full AI Brand Audit** — Score your brand across 6 dimensions: perception, entity clarity, citations, competitive position, geographic reach, and sentiment
 - **Competitive Intelligence** — See exactly which topics competitors are beating you on in AI responses, with gap analysis and priority actions
-- **Citation Mapping** — Check whether AI cites your brand for specific topics, and get a prioritized outreach list of high-authority sites to build backlinks from
+- **Hallucination Detection** — Paste any AI-generated text about your brand and get a claim-by-claim fact-check with severity ratings
+- **Schema Markup Generator** — Generate paste-ready JSON-LD (Organization, WebSite, FAQ, BreadcrumbList) optimized for AI discoverability
+- **Audit Query Generator** — Auto-generate 30+ categorized test queries mapped to the right follow-up tools
+- **Citation Mapping** — Check whether AI cites your brand for specific topics, and get a prioritized outreach list of high-authority sites
 - **Content Scoring** — Audit existing pages and score them for AI discoverability (A-F grades with optimization checklists)
 - **Prompt Vulnerability Detection** — Test specific prompts users might ask and find where AI gives wrong, weak, or competitor-favoring answers
-- **Sentiment Breakdown** — See the likely tone AI uses when discussing your brand across aspects like quality, pricing, service, and innovation
-- **Actionable Output** — Every tool returns structured markdown with tables, scores, checklists, and next steps — ready to act on
+- **4 Prompt Workflows** — Pre-built multi-tool workflows: Full Brand Audit, Quick Health Check, Competitive Deep Dive, Fix My AI Presence
 
 ---
 
@@ -35,7 +39,7 @@ All tools are **read-only**. They generate structured reports based on your bran
 1. Visit the [Anthropic MCP Directory](https://claude.ai/connectors)
 2. Find and connect **Newtation**
 3. Complete GitHub OAuth authentication
-4. Start using any of the 12 tools by asking Claude naturally
+4. Start using any of the 15 tools by asking Claude naturally
 
 ### Connect from Claude Desktop
 
@@ -87,7 +91,7 @@ This server uses **GitHub OAuth 2.0** for remote connections.
 
 ## Tools
 
-12 read-only tools organized into 4 categories:
+15 read-only tools organized into 5 categories:
 
 ### Core Audit
 | Tool | Purpose |
@@ -103,6 +107,7 @@ This server uses **GitHub OAuth 2.0** for remote connections.
 |------|---------|
 | `prompt_vulnerability_scan` | Finds prompts where AI gives wrong, weak, or competitor-favoring answers |
 | `sentiment_analysis` | Breaks down AI's likely tone across brand aspects (quality, pricing, service, etc.) |
+| `hallucination_check` | Paste AI-generated text → get claim-by-claim fact-check with severity ratings |
 
 ### Strategy & Output
 | Tool | Purpose |
@@ -111,11 +116,30 @@ This server uses **GitHub OAuth 2.0** for remote connections.
 | `competitor_gap_analysis` | Topic-by-topic scoring of where competitors lead in AI visibility |
 | `content_audit_for_ai` | Grades existing content (A-F) for AI discoverability |
 | `citation_outreach_targets` | Ranked list of high-authority sites to target for backlinks and citations |
+| `schema_markup_generator` | Generates paste-ready JSON-LD (Organization, WebSite, FAQ, BreadcrumbList) |
+
+### Generators
+| Tool | Purpose |
+|------|---------|
+| `generate_audit_queries` | Auto-generates 30+ categorized test queries with tool mapping and testing protocol |
 
 ### Summary
 | Tool | Purpose |
 |------|---------|
-| `ai_readiness_scorecard` | Composite score (0-100) across all dimensions with letter grade (A-F) |
+| `ai_readiness_scorecard` | Composite score across all dimensions with letter grade (A-F) |
+
+---
+
+## Prompt Workflows
+
+4 pre-built multi-tool workflows that appear in Claude's prompt selector:
+
+| Workflow | What It Does |
+|----------|-------------|
+| `full_brand_audit` | Runs 5 tools in sequence → executive summary with grade and 30-day action plan |
+| `quick_health_check` | 2-tool fast check → 1-paragraph summary of your AI visibility |
+| `competitive_deep_dive` | 3-tool competitive analysis → who's winning AI mindshare and how to close the gap |
+| `fix_my_ai_presence` | 4-tool fix sequence → schema markup code + content plan you can deploy this week |
 
 ---
 
@@ -218,7 +242,7 @@ Generate a content strategy for Acme Corp targeting weak areas: "workflow automa
 See our full privacy policy at: [https://newtationco.app/privacy](https://newtationco.app/privacy)
 
 **Summary:**
-- All 12 tools are **read-only** — they generate reports, never modify external data
+- All 15 tools are **read-only** — they generate reports, never modify external data
 - OAuth tokens stored in Cloudflare KV with 7-day expiration
 - Tool results are generated on-demand and not persisted
 - No conversation data, analytics, or tracking collected
@@ -311,7 +335,7 @@ Server URL: `https://newtation-mcp.<your-subdomain>.workers.dev/mcp`
 newtation-mcp/
 ├── src/
 │   ├── index.ts               # MCP server + OAuth (Cloudflare Workers)
-│   ├── tools.ts               # 12 brand auditing tools (TypeScript)
+│   ├── tools.ts               # 15 brand auditing tools (TypeScript)
 │   ├── github-handler.ts      # GitHub OAuth flow
 │   ├── utils.ts               # OAuth helpers
 │   └── workers-oauth-utils.ts # CSRF, state, approval dialog

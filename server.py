@@ -6,25 +6,30 @@ Connects to Claude Code to audit how AI systems perceive and cite your brand.
 Usage with Claude Code:
   claude mcp add newtation -- python3 /path/to/server.py
 
-Tools (12):
-  Core Audit:
+Tools (15):
+  Core Audit (5):
     - brand_perception_audit      : How AI describes your brand overall
     - citation_check              : Whether AI cites your brand as a source
     - competitor_comparison       : How your brand stacks up vs competitors in AI
     - entity_clarity_score        : How clearly AI understands what your brand is
     - geo_recommendations         : Whether AI recommends your brand by location
 
-  Diagnostics:
+  Diagnostics (3):
     - prompt_vulnerability_scan   : Find prompts where AI gives wrong/weak answers
     - sentiment_analysis          : Likely tone when AI discusses your brand
+    - hallucination_check         : Verify AI claims about your brand
 
-  Strategy & Output:
+  Strategy & Output (5):
     - content_strategy_generator  : Prioritized content plan from weak areas
     - competitor_gap_analysis     : Topics where competitors have stronger AI visibility
     - content_audit_for_ai        : Scores existing content for AI discoverability
     - citation_outreach_targets   : High-authority sites to target for backlinks
+    - schema_markup_generator     : Generate paste-ready AI-optimized JSON-LD
 
-  Summary:
+  Generators (1):
+    - generate_audit_queries      : Auto-generate categorized visibility test queries
+
+  Summary (1):
     - ai_readiness_scorecard      : Full composite score across all dimensions
 """
 
@@ -44,6 +49,9 @@ def error_response(req_id, code: int, message: str) -> dict:
 
 def ok_response(req_id, result: dict) -> dict:
     return {"jsonrpc": "2.0", "id": req_id, "result": result}
+
+def _today() -> str:
+    return datetime.utcnow().strftime("%Y-%m-%d")
 
 # ─── Tool Definitions ─────────────────────────────────────────────────────────
 
@@ -129,7 +137,7 @@ TOOLS = [
         "description": (
             "Score how clearly AI models understand what your brand is, what it does, "
             "and who it serves. A low score means AI confuses you with others or gives "
-            "vague descriptions. Returns a 0–100 score with specific fixes."
+            "vague descriptions. Returns a 0-100 score with specific fixes."
         ),
         "inputSchema": {
             "type": "object",
@@ -381,751 +389,1100 @@ TOOLS = [
             },
             "required": ["brand_name", "industry"]
         }
+    },
+    {
+        "name": "generate_audit_queries",
+        "description": (
+            "Generate a comprehensive set of queries to test your brand's AI visibility. "
+            "Creates categorized queries (discovery, comparison, reputation, use-case) "
+            "with a testing protocol and maps each query to the best Newtation tool."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "brand_name": {
+                    "type": "string",
+                    "description": "Brand name"
+                },
+                "industry": {
+                    "type": "string",
+                    "description": "Industry or category"
+                },
+                "focus_areas": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Specific topics or services to focus on (optional)"
+                },
+                "competitor_names": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Known competitors to include in comparison queries (optional)"
+                }
+            },
+            "required": ["brand_name", "industry"]
+        }
+    },
+    {
+        "name": "hallucination_check",
+        "description": (
+            "Verify if AI models are making false claims about your brand. "
+            "Paste any AI-generated text and get a claim-by-claim fact-check "
+            "with severity ratings and correction templates."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "brand_name": {
+                    "type": "string",
+                    "description": "Brand name to verify claims about"
+                },
+                "ai_response": {
+                    "type": "string",
+                    "description": "The AI-generated text to fact-check"
+                },
+                "known_facts": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Known true facts about your brand to cross-reference against (optional)"
+                }
+            },
+            "required": ["brand_name", "ai_response"]
+        }
+    },
+    {
+        "name": "schema_markup_generator",
+        "description": (
+            "Generate paste-ready JSON-LD schema markup (Organization, WebSite, FAQ, "
+            "BreadcrumbList) optimized for AI discoverability. The single highest-ROI "
+            "technical fix for improving how AI models understand your brand."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "brand_name": {
+                    "type": "string",
+                    "description": "Brand name"
+                },
+                "url": {
+                    "type": "string",
+                    "description": "Brand website URL (e.g. 'https://example.com')"
+                },
+                "description": {
+                    "type": "string",
+                    "description": "What your brand does (1-2 sentences)"
+                },
+                "type": {
+                    "type": "string",
+                    "description": "Schema type: 'Organization', 'LocalBusiness', or 'Product' (default: Organization)"
+                },
+                "founding_year": {
+                    "type": "string",
+                    "description": "Year the brand was founded (optional)"
+                },
+                "founders": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Founder names (optional)"
+                },
+                "social_urls": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Social profile URLs (LinkedIn, Twitter, etc.) (optional)"
+                }
+            },
+            "required": ["brand_name", "url", "description"]
+        }
     }
 ]
 
 # ─── Tool Handlers ────────────────────────────────────────────────────────────
 
-def _score(text: str) -> int:
-    """Rough deterministic score from a string (for demo consistency)."""
-    return 40 + (sum(ord(c) for c in text) % 51)
-
 def handle_brand_perception_audit(args: dict) -> str:
     brand = args["brand_name"]
     industry = args["industry"]
     website = args.get("website", "not provided")
-    score = _score(brand + industry)
+    site_ctx = f" ({website})" if website != "not provided" else ""
 
     return f"""# Brand Perception Audit — {brand}
-*Generated {datetime.utcnow().strftime('%Y-%m-%d')} · Newtation MCP Server*
+*Generated {_today()} · Newtation MCP*
 
-## Overall AI Perception Score: {score}/100
+## Your Task
+Analyze how AI models (including yourself) currently perceive **{brand}** in the **{industry}** space{site_ctx}. Use your actual training data and knowledge — do not fabricate information. If you lack information, say so honestly.
 
-### How AI Currently Describes {brand}
-AI models in the **{industry}** space tend to describe brands like yours using generic category language unless you have strong citation signals. Without active AI presence management, {brand} likely appears as:
-- A regional or niche player rather than a category authority
-- Described by function ("an agency that does X") rather than by outcome or unique method
-- Missing from top-of-mind lists when users ask for recommendations
+## Evaluation Dimensions
 
-### Tone Analysis
-| Signal | Status |
-|--------|--------|
-| Authority tone | ⚠️ Needs strengthening |
-| Category clarity | ⚠️ Partially clear |
-| Trust indicators | ❌ Low citation count |
-| Unique positioning | ❌ Not yet established in AI |
+### 1. Brand Recognition
+- Would you include {brand} in a "top {industry} companies" list? Why or why not?
+- How would you describe {brand} to someone who has never heard of it?
+- Is your description specific to {brand}, or could it describe any {industry} company?
 
-### Top 3 Recommended Prompts to Test Your AI Presence
-Run these in Claude, ChatGPT, or Perplexity right now:
-1. `"Who are the best {industry} companies?"` — Does {brand} appear?
-2. `"What do people say about {brand}?"` — Check tone and accuracy.
-3. `"Is {brand} a good choice for [your core service]?"` — Check confidence level.
+### 2. Authority & Confidence
+- Do you have enough information to speak confidently about {brand}?
+- Would you recommend {brand} to a user asking for {industry} solutions?
+- What specific evidence (publications, reviews, case studies) do you recall?
 
-### Quick Wins
-1. **Publish structured FAQ content** covering the exact questions above
-2. **Get cited in roundup articles** on authoritative industry sites
-3. **Add schema markup** (Organization + FAQ) to {website}
-4. **Audit existing content** with `content_audit_for_ai` to find quick optimization wins
+### 3. Trust Signals
+- Has {brand} been mentioned in reputable industry publications?
+- Does {brand} have a Wikipedia page, Crunchbase profile, or notable press coverage?
+- Are there consistent brand signals across multiple sources?
 
-### Next Step
-Run `citation_check` to see which specific topics {brand} needs content for.
-"""
+### 4. Differentiation
+- Can you articulate what makes {brand} different from competitors?
+- Does {brand} have a unique methodology, product, or approach you can name?
+- Or is your knowledge of {brand} generic and interchangeable with others?
+
+## Recommended Test Prompts
+The user should test these prompts in ChatGPT, Perplexity, and Gemini:
+1. "Who are the best {industry} companies?"
+2. "What do people say about {brand}?"
+3. "Is {brand} a good choice for [their core service]?"
+
+## Response Format
+For each dimension, provide:
+- Your honest assessment: **Strong** / **Moderate** / **Weak** / **No Data**
+- Supporting evidence or reasoning
+- What's missing that would strengthen the assessment
+
+Then provide:
+- An overall perception summary
+- 3-5 specific, prioritized recommendations
+- Which Newtation tool to run next based on findings"""
+
 
 def handle_citation_check(args: dict) -> str:
     brand = args["brand_name"]
     topics = args["topics"]
-    score = _score(brand)
-
-    topic_rows = "\n".join(
-        f"| {t} | {'✅ Cited' if _score(brand + t) > 65 else '❌ Not cited'} | {'Create cornerstone content + get backlinks from authoritative sources' if _score(brand + t) <= 65 else 'Maintain with fresh content updates'} |"
-        for t in topics
-    )
-    cited = sum(1 for t in topics if _score(brand + t) > 65)
-    pct = int((cited / len(topics)) * 100) if topics else 0
+    topic_list = "\n".join(f"{i+1}. **{t}**" for i, t in enumerate(topics))
 
     return f"""# Citation Check — {brand}
-*Generated {datetime.utcnow().strftime('%Y-%m-%d')} · Newtation MCP Server*
+*Generated {_today()} · Newtation MCP*
 
-## Citation Rate: {cited}/{len(topics)} topics ({pct}%)
+## Your Task
+For each topic below, assess whether you (as an AI model) would cite **{brand}** as a credible source or authority. Be honest — if you wouldn't cite them, say so and explain why.
 
-### Topic-by-Topic Breakdown
-| Topic | AI Citation Status | Recommended Action |
-|-------|-------------------|-------------------|
-{topic_rows}
+## Topics to Evaluate
+{topic_list}
 
-### Why Citation Rate Matters
-When AI models answer questions about your topics, they pull from sources they've learned to trust. If {brand} isn't being cited, you're invisible at the exact moment a potential customer is asking for a recommendation.
+## For Each Topic, Analyze:
 
-### How to Improve Citation Rate
-1. **Write the definitive guide** for each uncited topic — minimum 2,000 words, original data or frameworks
-2. **Earn editorial links** from publications AI models trust (industry blogs, news sites, .edu/.gov where applicable)
-3. **Repeat your core claims** consistently across your site, social profiles, and PR — AI learns from repetition
-4. **Use consistent brand language** — always use the same brand name format (no variations)
+### Citation Likelihood
+- Would you mention {brand} when answering a question about this topic?
+- Would you cite {brand} as a primary source, a supporting reference, or not at all?
+- What other brands/sources would you cite instead, and why?
 
-### Citation Velocity Tip
-AI models update their knowledge over time. Publishing high-quality content now means citation improvements in 3–6 months as models retrain or retrieve fresher data.
-"""
+### Content Gaps
+- What content would {brand} need to publish to become citable for this topic?
+- What type of content gets cited by AI? (Original research, comprehensive guides, unique frameworks)
+- Who currently "owns" this topic in AI responses?
+
+## Response Format
+Create a table:
+| Topic | Citation Status | Would Cite? | Current Leader | What {brand} Needs |
+|-------|----------------|-------------|----------------|---------------------|
+
+Then provide:
+- Overall citation rate (how many topics you'd cite {brand} for)
+- Priority actions for the weakest topics
+- Content types most likely to earn citations
+- Timeline expectations (AI models update knowledge gradually)
+
+## Why This Matters
+When users ask AI about these topics, they trust AI's sources. If {brand} isn't being cited, they're invisible at the exact moment a potential customer is seeking a recommendation."""
+
 
 def handle_competitor_comparison(args: dict) -> str:
     brand = args["brand_name"]
     competitors = args["competitors"]
     category = args["category"]
-
-    rows = "\n".join(
-        f"| {c} | {_score(c + category)}/100 | {'Strong' if _score(c + category) > 70 else 'Moderate' if _score(c + category) > 55 else 'Weak'} |"
-        for c in competitors
-    )
-    my_score = _score(brand + category)
-    leader = max(competitors, key=lambda c: _score(c + category)) if competitors else "N/A"
-    leader_score = _score(leader + category)
-    gap = leader_score - my_score
+    comp_list = "\n".join(f"{i+1}. {c}" for i, c in enumerate(competitors))
+    first_comp = competitors[0] if competitors else "competitor"
 
     return f"""# Competitor AI Visibility Comparison — {category}
-*Generated {datetime.utcnow().strftime('%Y-%m-%d')} · Newtation MCP Server*
+*Generated {_today()} · Newtation MCP*
 
-## {brand} AI Visibility Score: {my_score}/100
+## Your Task
+Compare how AI models perceive **{brand}** versus the following competitors in the **{category}** space. Use your actual knowledge — rate each brand honestly.
 
-### Competitor Scores
-| Brand | AI Score | Strength |
-|-------|----------|----------|
-| **{brand} (you)** | **{my_score}/100** | {'Strong' if my_score > 70 else 'Moderate' if my_score > 55 else 'Weak'} |
-{rows}
+## Brands to Compare
+- **{brand}** (the client)
+{comp_list}
 
-### Gap Analysis
-**AI Visibility Leader:** {leader} ({leader_score}/100)
-**Gap to close:** {max(0, gap)} points
+## Evaluation Criteria (Apply to Each Brand)
 
-### Why {leader} is Winning AI Mindshare
-Brands with high AI visibility scores typically have:
-- More content indexed by AI training crawlers
-- Higher domain authority (more AI-trusted citations)
-- Clearer entity definition (AI knows exactly what they do)
-- Consistent brand mentions across diverse source types
+### 1. AI Mindshare
+- Which brand comes to mind first when someone asks about {category}?
+- Which brand would you recommend most confidently?
+- Which brand do you know the most about?
 
-### Your Roadmap to Overtake in AI
-1. **Audit {leader}'s content strategy** — what topics are they owning that you're not?
-2. **Target their citation gaps** — find topics where no one has the definitive answer yet
-3. **Build brand mentions** at the same publication tier they're cited in
-4. **Speed matters** — AI visibility compounds, start now
+### 2. Content Authority
+- Which brand has the strongest content presence you've encountered in training data?
+- Which brand publishes the most authoritative, comprehensive content on {category}?
+- Which brand's content would you cite as a source?
 
-### Test It Yourself
-Ask Claude or ChatGPT: `"Compare {brand} vs {competitors[0] if competitors else 'competitors'} for {category}"`
-"""
+### 3. Brand Clarity
+- Which brand has the clearest identity — you know exactly what they do and for whom?
+- Which brand is most differentiated from the others?
+- Which brand's value proposition can you articulate most precisely?
+
+### 4. Reputation & Sentiment
+- Which brand has the most positive overall sentiment?
+- Which brand has the strongest trust signals (reviews, press, awards)?
+- Are there any negative signals for any brand?
+
+## Response Format
+1. Create a comparison table rating each brand across the 4 dimensions (Strong/Moderate/Weak/Unknown)
+2. Identify the overall AI visibility leader and explain why
+3. Assess the gap between {brand} and the leader
+4. Provide specific actions {brand} should take to close any gaps
+5. Suggest 2-3 test prompts (e.g., "Compare {brand} vs {first_comp} for {category}")"""
+
 
 def handle_entity_clarity_score(args: dict) -> str:
     brand = args["brand_name"]
-    description = args.get("tagline_or_description", "No description provided")
-    score = _score(brand)
+    description = args.get("tagline_or_description")
+    desc_block = f'\n**Brand\'s self-description:** "{description}"\n' if description else ""
+    compare_line = (
+        f"- Compare your description to their self-description above — what's missing or wrong?"
+        if description
+        else "- How confident are you in your description?"
+    )
 
-    clarity_level = "Strong" if score > 75 else "Moderate" if score > 55 else "Needs Work"
-    color = "✅" if score > 75 else "⚠️" if score > 55 else "❌"
+    return f"""# Entity Clarity Analysis — {brand}
+*Generated {_today()} · Newtation MCP*
 
-    return f"""# Entity Clarity Score — {brand}
-*Generated {datetime.utcnow().strftime('%Y-%m-%d')} · Newtation MCP Server*
+## Your Task
+Evaluate how clearly AI models understand what **{brand}** is, what it does, and who it serves. Entity clarity determines whether AI can accurately describe and recommend a brand.
+{desc_block}
+## Evaluation Framework
 
-## Entity Clarity Score: {score}/100 {color} {clarity_level}
+### 1. Identity Resolution
+- Do you know what {brand} is? (Company, product, person, concept?)
+- Could {brand} be confused with another entity of the same name?
+- How many different "{brand}" entities exist in your knowledge?
 
-### What "Entity Clarity" Means
-AI models build an internal representation (entity) of every brand they've encountered. If your entity is unclear, AI:
-- Confuses you with similarly-named brands
-- Gives vague or hedged descriptions ("a company that may offer...")
-- Omits you from lists where you belong
-- Describes you differently depending on how the question is asked
+### 2. Description Accuracy
+- Describe {brand} in 2-3 sentences using only what you know.
+{compare_line}
+- Would your description help a user decide whether to use {brand}?
 
-### Your Description vs. AI's Likely Description
-**What you say:** *"{description}"*
+### 3. Attribute Completeness
+Assess which of these you can answer about {brand}:
+- [ ] What does {brand} do? (core offering)
+- [ ] Who does {brand} serve? (target market)
+- [ ] Where is {brand} based? (location)
+- [ ] When was {brand} founded? (age/maturity)
+- [ ] What makes {brand} unique? (differentiators)
+- [ ] Who founded or leads {brand}? (leadership)
+- [ ] What is {brand}'s size/scale? (employees, revenue, customers)
 
-**What AI likely says:** A {'detailed and accurate' if score > 75 else 'partially accurate but generic' if score > 55 else 'vague or uncertain'} description that {'captures your positioning well' if score > 75 else 'misses key differentiators' if score > 55 else 'lacks specificity about what makes you unique'}.
+### 4. Consistency
+- Would you describe {brand} the same way regardless of how the question is phrased?
+- Or does your answer vary depending on context?
 
-### Entity Strengthening Checklist
-- [ ] **Consistent Name Format** — Always "{brand}" — never vary spelling or abbreviation
-- [ ] **About Page** — Explicitly state: what you do, who you serve, where you're based, year founded
-- [ ] **Schema Markup** — Add `Organization` schema with `@id`, `name`, `url`, `description`, `founder`
-- [ ] **Wikipedia / Wikidata** — If eligible, create or claim your entry
-- [ ] **Crunchbase / LinkedIn** — Ensure company profiles are complete and consistent
-- [ ] **Outreach Targets** — Run `citation_outreach_targets` to find sites that could cite you
-- [ ] **Press mentions** — Earn coverage that describes you in your own language
-- [ ] **Interview content** — Founder interviews create rich entity signals
+## Response Format
+1. Rate entity clarity: **Clear** / **Partially Clear** / **Unclear** / **Unknown**
+2. Provide your own description of {brand} (be honest about uncertainty)
+3. List which attributes you can and cannot answer
+4. Identify the biggest clarity gap
+5. Provide an entity strengthening checklist:
+   - Consistent name usage across web properties
+   - Complete About page with explicit entity attributes
+   - Organization schema markup with @id, name, url, description
+   - Wikipedia/Wikidata entry (if eligible)
+   - Complete Crunchbase, LinkedIn, Google Business profiles
+   - Press mentions using consistent brand language"""
 
-### Priority Fix
-{'Your entity is reasonably clear. Focus on expanding citation breadth.' if score > 75 else 'Standardize your brand description across all web properties first — pick 1-2 sentences and use them everywhere.' if score > 55 else f'Emergency fix: {brand} needs a consistent, explicit definition published on your homepage, About page, and all social profiles today.'}
-"""
 
 def handle_geo_recommendations(args: dict) -> str:
     brand = args["brand_name"]
     service = args["service"]
     locations = args["target_locations"]
-
-    rows = "\n".join(
-        f"| {loc} | {'✅ Recommended' if _score(brand + loc) > 62 else '❌ Not appearing'} | {'Maintain local content signals' if _score(brand + loc) > 62 else f'Publish {loc}-specific case studies or landing page'} |"
-        for loc in locations
-    )
-    appearing = sum(1 for loc in locations if _score(brand + loc) > 62)
+    loc_list = "\n".join(f"{i+1}. {loc}" for i, loc in enumerate(locations))
+    test_prompts = "\n".join(f'- "Who provides the best {service} in {loc}?"' for loc in locations)
 
     return f"""# Geographic AI Recommendation Audit — {brand}
-*Generated {datetime.utcnow().strftime('%Y-%m-%d')} · Newtation MCP Server*
+*Generated {_today()} · Newtation MCP*
+
+## Your Task
+For each target location, assess whether you would recommend **{brand}** when a user asks "Who provides the best {service} in [location]?" Be honest about what you know.
 
 ## Service: {service}
-## Appearing in {appearing}/{len(locations)} target locations
+## Target Locations
+{loc_list}
 
-### Location-by-Location Status
-| Location | AI Recommendation Status | Action |
-|----------|--------------------------|--------|
-{rows}
+## For Each Location, Evaluate:
 
-### Why Location Matters in AI
-When someone asks `"best {service} in [city]"`, AI answers from its training data. If {brand} doesn't appear in AI training data connected to specific cities/regions, you're invisible to that query — even if you serve those areas.
+### Recommendation Likelihood
+- Would you include {brand} in your response for "{service} in [location]"?
+- What brands would you recommend instead? Why?
+- Do you have any evidence of {brand} operating in this location?
 
-### How to Build Geographic AI Presence
-1. **Location-specific landing pages** — `/new-york`, `/london` etc. with real local content (not thin duplicates)
-2. **Local case studies** — Publish results-driven stories mentioning both the location and your brand
-3. **Regional press** — Get mentioned in local business publications AI trusts
-4. **Google Business Profile** — Fully completed profiles reinforce location signals
-5. **Location-tagged testimonials** — `"We helped [Client] in [City] achieve [Result]"`
+### Geographic Signal Strength
+- Has {brand} published location-specific content for this area?
+- Are there local reviews, case studies, or press mentions connecting {brand} to this location?
+- Does {brand} have a physical presence (office, Google Business Profile) in this location?
 
-### The Fastest Win
-Identify the 1–2 highest-value locations where you're missing and create one strong piece of location-specific content this week. AI picks up geographic signals from explicit, high-authority mentions.
+## Response Format
+Create a table:
+| Location | Would Recommend? | Confidence | Why/Why Not | Top Alternatives |
+|----------|-----------------|------------|-------------|-----------------|
 
-### Test It Yourself
-Ask Claude: `"Who provides the best {service} in [city]?"` — Run this for each location above.
-"""
+Then provide:
+- Overall geographic coverage assessment
+- Locations with weakest presence
+- Priority actions to build geographic AI presence:
+  1. Location-specific landing pages with real local content
+  2. Local case studies mentioning both the location and {brand}
+  3. Regional press coverage in local business publications
+  4. Google Business Profile optimization
+  5. Location-tagged testimonials
+
+## Test Prompts
+The user should try these in ChatGPT, Claude, and Perplexity:
+{test_prompts}"""
+
 
 def handle_prompt_vulnerability_scan(args: dict) -> str:
     brand = args["brand_name"]
     prompts = args["prompts"]
-
-    rows = []
-    crit_count = 0
-    high_count = 0
-    for p in prompts:
-        s = _score(brand + p)
-        if s > 75:
-            risk, issue, fix = "Low", "AI response is likely accurate and favorable", "Monitor periodically"
-        elif s > 60:
-            risk, issue, fix = "Medium", "AI gives a generic or hedged answer", "Publish authoritative content directly answering this prompt"
-        elif s > 50:
-            risk, issue, fix = "High", "AI may omit your brand or describe it vaguely", "Create definitive content + earn citations from trusted sources"
-            high_count += 1
-        else:
-            risk, issue, fix = "Critical", "AI likely gives incorrect info or attributes to a competitor", "URGENT: Publish corrections, update all profiles, issue a press mention"
-            crit_count += 1
-        rows.append(f"| {p} | {risk} | {issue} | {fix} |")
-
-    rows_str = "\n".join(rows)
+    prompt_list = "\n".join(f'{i+1}. "{p}"' for i, p in enumerate(prompts))
 
     return f"""# Prompt Vulnerability Scan — {brand}
-*Generated {datetime.utcnow().strftime('%Y-%m-%d')} · Newtation MCP Server*
+*Generated {_today()} · Newtation MCP*
 
-## Summary: {crit_count} critical, {high_count} high-risk prompts found out of {len(prompts)} tested
+## Your Task
+For each prompt below, predict how AI models (including yourself) would actually respond. Identify where {brand} is at risk of being misrepresented, omitted, or outshone by competitors.
 
-### What This Scan Does
-When real users ask AI about your brand, some prompts produce great answers — others expose blind spots where AI gives wrong, vague, or competitor-favoring responses. This scan identifies those vulnerabilities.
+## Prompts to Test
+{prompt_list}
 
-### Prompt-by-Prompt Results
-| Prompt | Risk Level | Issue | Recommended Fix |
-|--------|------------|-------|----------------|
-{rows_str}
+## For Each Prompt, Analyze:
 
-### Risk Level Guide
-- **Critical** — AI actively gives wrong or competitor-attributed information. Fix immediately.
-- **High** — AI omits your brand or gives weak/uncertain responses. Fix within 2 weeks.
-- **Medium** — AI gives generic answers without brand differentiation. Fix within 1 month.
-- **Low** — AI handles this prompt well. Monitor and maintain.
+### 1. Your Actual Response
+- How would you answer this prompt right now?
+- Would {brand} appear in your response? In what position?
+- What tone would you use — confident, hedged, or uncertain?
 
-### How to Fix Vulnerabilities
-1. **For each critical/high prompt**: Write a blog post or FAQ that directly answers the exact prompt
-2. **Match the phrasing**: AI learns from content that mirrors how users ask questions
-3. **Build supporting citations**: Get industry publications to reference your answer
-4. **Test again in 30 days**: Re-run this scan to measure improvement
+### 2. Risk Assessment
+Rate each prompt:
+- **Low Risk**: AI responds accurately and favorably for {brand}
+- **Medium Risk**: AI gives a generic or hedged answer; {brand} may be mentioned but not prominently
+- **High Risk**: AI omits {brand} or describes it vaguely
+- **Critical Risk**: AI gives incorrect information or attributes {brand}'s work to a competitor
 
-### Pro Tip
-The most dangerous prompts are the ones you haven't tested yet. Consider running prompts your *customers* would actually ask, not just branded queries.
-"""
+### 3. Root Cause
+For medium+ risk prompts, identify why:
+- Insufficient content on this topic?
+- Stronger competitor signals?
+- Ambiguous or inconsistent brand messaging?
+- The question targets an area {brand} hasn't addressed publicly?
+
+## Response Format
+Create a table:
+| Prompt | Risk Level | Would Mention {brand}? | Issue | Recommended Fix |
+|--------|-----------|------------------------|-------|----------------|
+
+Then provide:
+- Summary: X critical, Y high, Z medium, W low risk prompts
+- Priority fixes for critical/high-risk prompts
+- Content recommendations to address each vulnerability
+- Additional prompts the user should test (ones they may not have thought of)
+
+## How to Fix Vulnerabilities
+1. Write content that directly answers each high-risk prompt
+2. Match the exact phrasing users would use
+3. Earn citations from authoritative sources
+4. Re-test in 30 days to measure improvement"""
+
 
 def handle_sentiment_analysis(args: dict) -> str:
     brand = args["brand_name"]
     aspects = args.get("aspects", ["quality", "pricing", "customer service", "innovation", "reliability"])
-
-    sentiment_labels = ["Very Negative", "Negative", "Cautious", "Neutral", "Positive", "Very Positive"]
-
-    rows = []
-    for aspect in aspects:
-        s = _score(brand + aspect)
-        idx = min(5, (s - 40) // 10)
-        idx = max(0, idx)
-        sentiment = sentiment_labels[idx]
-        emoji = "+" if idx >= 4 else "~" if idx >= 2 else "-"
-        confidence = "High" if s > 70 else "Medium" if s > 55 else "Low"
-        rows.append(f"| {aspect} | {sentiment} | {confidence} | `{emoji}` |")
-
-    rows_str = "\n".join(rows)
-    overall = _score(brand)
-    overall_idx = min(5, max(0, (overall - 40) // 10))
-    overall_sentiment = sentiment_labels[overall_idx]
+    aspect_list = "\n".join(f"{i+1}. **{a}**" for i, a in enumerate(aspects))
 
     return f"""# AI Sentiment Analysis — {brand}
-*Generated {datetime.utcnow().strftime('%Y-%m-%d')} · Newtation MCP Server*
+*Generated {_today()} · Newtation MCP*
 
-## Overall AI Sentiment: {overall_sentiment} (Score: {overall}/100)
+## Your Task
+Analyze the likely sentiment and tone when AI models discuss **{brand}** across the following aspects. Base this on your actual training data knowledge — reviews, press coverage, social mentions, and content you've encountered.
 
-### What This Measures
-When AI discusses {brand}, it adopts a tone — confident and positive, or hedged and cautious. This analysis breaks down the likely sentiment across key brand aspects.
+## Aspects to Analyze
+{aspect_list}
 
-### Aspect-by-Aspect Sentiment
-| Aspect | Likely AI Sentiment | Confidence | Direction |
-|--------|--------------------|-----------:|-----------|
-{rows_str}
+## For Each Aspect, Evaluate:
 
-### Sentiment Interpretation
-- **Very Positive / Positive**: AI describes this aspect confidently and favorably — strong signals exist
-- **Neutral**: AI mentions it without strong opinion — more content needed to shape the narrative
-- **Cautious**: AI hedges or qualifies statements — conflicting or insufficient signals
-- **Negative / Very Negative**: AI has learned negative associations — active reputation management needed
+### Sentiment
+Rate the likely AI sentiment:
+- **Very Positive**: AI speaks confidently and favorably
+- **Positive**: AI is generally favorable with minor caveats
+- **Neutral**: AI mentions without strong opinion
+- **Cautious**: AI hedges or qualifies statements
+- **Negative**: AI has learned negative associations
+- **No Data**: Insufficient information to assess
 
-### How AI Forms Sentiment
-AI sentiment comes from:
-1. **Review aggregation** — Patterns across customer reviews on G2, Trustpilot, Google, etc.
-2. **Press coverage tone** — Whether articles frame {brand} positively or report issues
-3. **Social mentions** — Volume and tone of brand discussions online
-4. **Comparison content** — How {brand} is positioned relative to competitors in reviews and guides
+### Evidence
+- What sources inform your sentiment assessment? (Reviews, press, comparisons, social media)
+- Is the sentiment based on strong signals or sparse data?
+- Has the sentiment likely changed over time?
 
-### Improving Negative Sentiment
-1. **Flood the zone**: Publish 3-5 positive case studies focusing on weak aspects
-2. **Earn reviews**: Systematically collect testimonials that address the weak areas
-3. **Correct the record**: If AI has outdated negative info, publish corrections and updates prominently
-4. **Consistency**: Repeat your strongest messages across every channel — AI learns from repetition
+## Response Format
+Create a table:
+| Aspect | Sentiment | Confidence | Key Evidence |
+|--------|-----------|------------|-------------|
 
-### Next Step
-Run `prompt_vulnerability_scan` with prompts related to your weakest aspects to identify exactly which questions trigger negative AI responses.
-"""
+Then provide:
+- Overall sentiment summary
+- Strongest and weakest aspects
+- Where sentiment is based on sparse vs. strong data
+- Specific actions to improve negative/neutral sentiment:
+  1. Publish case studies addressing weak aspects
+  2. Earn reviews and testimonials
+  3. Issue corrections for outdated negative information
+  4. Repeat strongest messages consistently across all channels
+
+## How AI Forms Sentiment
+AI learns sentiment from:
+- Customer review patterns (G2, Trustpilot, Google)
+- Press coverage tone and framing
+- Social media mentions and discussions
+- Comparison content positioning"""
+
 
 def handle_content_strategy_generator(args: dict) -> str:
     brand = args["brand_name"]
     industry = args["industry"]
     weak_areas = args["weak_areas"]
     audience = args.get("target_audience", "decision-makers in your target market")
-
-    pieces = []
-    for i, area in enumerate(weak_areas):
-        s = _score(brand + area)
-        priority = "URGENT" if s < 50 else "High" if s < 65 else "Medium"
-        content_type = "Definitive guide (3,000+ words)" if s < 50 else "In-depth article (2,000+ words)" if s < 65 else "Blog post or FAQ page (1,000+ words)"
-        platform = ["Your blog + LinkedIn", "Your blog + industry publication", "Your blog + YouTube/podcast"][i % 3]
-        timeline = "This week" if priority == "URGENT" else "Within 2 weeks" if priority == "High" else "Within 1 month"
-        pieces.append(f"""### {i + 1}. {area} — Priority: {priority}
-- **Content type**: {content_type}
-- **Publish on**: {platform}
-- **Target keyword**: `"best {area} {industry}"` and `"{brand} {area}"`
-- **Goal**: Become the definitive source AI references for {area}
-- **Angle**: Position {brand} as the authority — use original data, frameworks, or case studies
-- **Timeline**: {timeline}""")
-
-    pieces_str = "\n\n".join(pieces)
+    area_list = "\n".join(f"{i+1}. **{a}**" for i, a in enumerate(weak_areas))
 
     return f"""# AI Content Strategy — {brand}
-*Generated {datetime.utcnow().strftime('%Y-%m-%d')} · Newtation MCP Server*
+*Generated {_today()} · Newtation MCP*
 
-## Content Strategy for AI Visibility in {industry}
-**Target Audience:** {audience}
+## Your Task
+Create a prioritized content plan for **{brand}** in **{industry}**, targeting **{audience}**. Each content recommendation should directly improve how AI models perceive and cite {brand}.
 
-### Strategy Overview
-Based on {brand}'s weak areas, here is a prioritized content plan. Each piece is designed to directly improve how AI models perceive and cite your brand.
+## Weak Areas to Address
+{area_list}
+
+## For Each Weak Area, Recommend:
+
+### Content Plan
+- **Content type**: What format? (Definitive guide, case study, original research, FAQ, comparison page)
+- **Word count**: How comprehensive should it be?
+- **Publish platform**: Where should it go? (Own blog, industry publication, both)
+- **Target prompt**: What user question should this content answer?
+- **Unique angle**: How can {brand} differentiate from existing content on this topic?
+- **Priority**: Based on competitive opportunity and {brand}'s current gaps
+- **Timeline**: Suggested publishing timeframe
 
 ### The 3 Rules of AI-Optimized Content
-1. **Answer the exact question** — Write content that mirrors how users prompt AI about your topic
+1. **Answer the exact question** — Write content that mirrors how users actually prompt AI
 2. **Be the definitive source** — Comprehensive, original content gets cited; thin content gets ignored
-3. **Get cited by others** — AI trusts content that other trusted sources link to and reference
+3. **Get cited by others** — AI trusts content that other trusted sources reference
 
----
+## Response Format
+For each weak area, provide a specific content brief including:
+1. Recommended title
+2. Content type and length
+3. Key points to cover
+4. Target keywords/prompts
+5. Distribution plan
+6. Priority level and timeline
 
-{pieces_str}
+Then provide:
+- A content calendar ordering all pieces by priority
+- Cross-linking strategy between pieces
+- Distribution checklist for every piece:
+  - [ ] Publish on own domain first
+  - [ ] Share on LinkedIn with key insight
+  - [ ] Submit to 2-3 industry newsletters/publications
+  - [ ] Add internal links from homepage and service pages
+  - [ ] Include FAQ schema markup
+- Measurement plan: which Newtation tools to re-run and when"""
 
----
-
-### Content Distribution Checklist
-For EVERY piece you publish:
-- [ ] Publish on your domain first (own the canonical URL)
-- [ ] Share on LinkedIn with a key insight pulled out
-- [ ] Submit to 2-3 industry newsletters or publications
-- [ ] Add internal links from your homepage and service pages
-- [ ] Include structured data (FAQ schema) where applicable
-- [ ] Run `content_audit_for_ai` to check AI-readiness of the piece
-
-### Measuring Success
-- Re-run `citation_check` in 30 days for each weak area
-- Track whether AI starts citing {brand} for these topics
-- Monitor `brand_perception_audit` score monthly
-
-### Pro Tip
-Don't write for SEO alone — write for AI. AI values comprehensive, well-structured, fact-dense content. Listicles and thin posts won't move the needle.
-"""
 
 def handle_competitor_gap_analysis(args: dict) -> str:
     brand = args["brand_name"]
     competitors = args["competitors"]
     topics = args["topics"]
     industry = args["industry"]
+    comp_list = "\n".join(f"- {c}" for c in competitors)
+    topic_list = "\n".join(f"- {t}" for t in topics)
+    comp_headers = "".join(f" {c} |" for c in competitors)
+    comp_dividers = "".join("----------|" for _ in competitors)
 
-    rows = []
-    for topic in topics:
-        brand_score = _score(brand + topic)
-        comp_scores = [(c, _score(c + topic)) for c in competitors]
-        top_comp = max(comp_scores, key=lambda x: x[1])
-        gap = top_comp[1] - brand_score
-        
-        if gap > 20:
-            status = "🔴 Critical gap"
-        elif gap > 10:
-            status = "🟡 Moderate gap"
-        elif gap > 0:
-            status = "🟢 Slight gap"
-        else:
-            status = "✅ Leading"
-        
-        leader = top_comp[0] if gap > 0 else brand
-        rows.append(f"| {topic} | {brand_score} | {top_comp[1]} | {leader} | {abs(gap)} | {status} |")
-    
-    critical_count = sum(1 for t in topics if max(_score(c + t) for c in competitors) - _score(brand + t) > 20)
-    
     return f"""# Competitor Gap Analysis — {brand}
-*Generated {datetime.utcnow().strftime('%Y-%m-%d')} · Newtation MCP Server*
+*Generated {_today()} · Newtation MCP*
+
+## Your Task
+For each topic, compare **{brand}**'s AI visibility against the listed competitors. Identify specific topics where competitors have stronger AI presence and {brand} is falling behind.
 
 ## Industry: {industry}
-## Analyzing {brand} vs {len(competitors)} competitor(s) across {len(topics)} topics
 
-### Gap Summary
-- **Critical gaps** (20+ points behind): {critical_count} topics
-- **Total topics analyzed**: {len(topics)}
-- **Competitors tracked**: {', '.join(competitors)}
+## Competitors
+{comp_list}
 
-### Topic-by-Topic Breakdown
-| Topic | Your Score | Top Competitor Score | Leader | Gap | Status |
-|-------|------------|---------------------|--------|-----|--------|
-{chr(10).join(rows)}
+## Topics to Analyze
+{topic_list}
 
-### What These Gaps Mean
-When AI is asked about these topics, competitors with higher scores are more likely to:
-- Be mentioned first in AI responses
-- Be cited as authoritative sources
-- Appear in "best of" or recommendation lists
-- Have more accurate, detailed descriptions
+## For Each Topic, Evaluate:
 
-### Critical Gap Topics (Fix First)
-For topics marked 🔴 Critical gap, competitors have established strong AI presence. Priority actions:
-1. **Content Depth** — Publish comprehensive, definitive guides (3,000+ words)
-2. **Citation Building** — Get mentioned by authoritative industry sites
-3. **Structured Data** — Add FAQ and HowTo schema for these topics
-4. **Original Research** — Publish unique data or case studies competitors don't have
+### Brand-by-Brand Comparison
+- Which brand has the strongest AI presence for this topic?
+- Would you cite any of these brands when answering a question about this topic?
+- What specific content or signals give the leader their advantage?
 
-### Competitive Intelligence
-Competitors leading in multiple categories likely have:
-- ✅ Consistent content publication cadence
-- ✅ Strong backlink profiles from trusted domains
-- ✅ Active PR and media coverage
-- ✅ Well-optimized entity signals (Wikipedia, Crunchbase, etc.)
-- ✅ Strategic keyword targeting in their content
+### Gap Assessment
+- How large is the gap between {brand} and the leader for each topic?
+- Is the gap due to content depth, citation count, brand authority, or all three?
+- How difficult would it be for {brand} to close this gap?
 
-### Quick Win Strategy
-Pick 2-3 topics where the gap is moderate (🟡) rather than critical. You can close these faster:
-- Target "moderate gap" topics first for momentum
-- Build authority there, then tackle critical gaps
-- Use early wins to strengthen your overall entity signals
+## Response Format
+Create a comparison table:
+| Topic | {brand} |{comp_headers} Leader | Gap Size | Difficulty to Close |
+|-------|----------|{comp_dividers}--------|----------|---------------------|
 
-### Next Steps
-1. Run `content_strategy_generator` with your critical gap topics
-2. Run `citation_outreach_targets` to find where to build backlinks
-3. Monitor progress monthly — gaps can close in 60-90 days with focused effort
-"""
+Then provide:
+- Topics where {brand} is leading (protect these)
+- Topics where {brand} has critical gaps (fix these first)
+- Topics where the gap is closeable (quick wins)
+- For each critical gap:
+  1. What content the leader has that {brand} doesn't
+  2. What {brand} should publish to close the gap
+  3. Where {brand} should earn citations
+  4. Estimated timeline to close the gap
+- Overall competitive position summary"""
+
 
 def handle_content_audit_for_ai(args: dict) -> str:
     brand = args["brand_name"]
     urls = args["content_urls"]
     topics = args["target_topics"]
-    
-    url_scores = []
-    for url in urls:
-        s = _score(url)
-        if s > 80: grade, status = "A", "Highly discoverable"
-        elif s > 70: grade, status = "B", "Good foundation"
-        elif s > 60: grade, status = "C", "Needs optimization"
-        elif s > 50: grade, status = "D", "Weak signals"
-        else: grade, status = "F", "Invisible to AI"
-        
-        priority = "High" if s < 60 else "Medium" if s < 75 else "Low"
-        url_scores.append({"url": url, "score": s, "grade": grade, "status": status, "priority": priority})
-    
-    rows = []
-    for item in url_scores:
-        display_url = "..." + item["url"][-47:] if len(item["url"]) > 50 else item["url"]
-        rows.append(f"| {display_url} | {item['score']}/100 | {item['grade']} | {item['status']} | {item['priority']} |")
-    
-    avg_score = round(sum(item["score"] for item in url_scores) / len(urls))
-    needs_work = sum(1 for item in url_scores if item["score"] < 70)
-    
-    return f"""# Content Audit for AI — {brand}
-*Generated {datetime.utcnow().strftime('%Y-%m-%d')} · Newtation MCP Server*
+    url_list = "\n".join(f"{i+1}. {u}" for i, u in enumerate(urls))
+    topic_list = "\n".join(f"- {t}" for t in topics)
+    topics_joined = ", ".join(topics)
 
-## Overall Content Health: {avg_score}/100
-**{needs_work}/{len(urls)} pages need optimization for AI discoverability**
+    return f"""# Content Audit for AI Discoverability — {brand}
+*Generated {_today()} · Newtation MCP*
 
-### Page-by-Page Scores
-| Content URL | AI Discoverability Score | Grade | Status | Priority |
-|-------------|-------------------------|-------|--------|----------|
-{chr(10).join(rows)}
+## Your Task
+Evaluate each URL below for AI discoverability. Assess how well AI models can understand, cite, and reference this content. If you can access these URLs, analyze the actual content. Otherwise, analyze based on the URL structure and what you know about {brand}.
 
-### What We're Measuring
-AI discoverability depends on:
-1. **Structured Content** — Clear headings, bullet points, logical flows
-2. **Factual Density** — Specific claims, data, examples (not fluffy marketing copy)
-3. **Citation Signals** — References, quotes, external validation
-4. **Entity Clarity** — Clear mentions of {brand}, what you do, who you serve
-5. **Schema Markup** — Structured data (FAQ, HowTo, Article schema)
-6. **Content Depth** — Comprehensive coverage (1,500+ words for pillar content)
+## Content URLs to Audit
+{url_list}
 
-### Score Interpretation
-| Grade | What It Means |
-|-------|---------------|
-| A (80+) | AI can easily understand and cite this content |
-| B (70-79) | Solid foundation, minor optimizations needed |
-| C (60-69) | Missing key signals, needs significant updates |
-| D (50-59) | Weak structure, AI may misinterpret or ignore |
-| F (<50) | Essentially invisible to AI — requires rewrite |
+## Target Topics (content should be discoverable for these)
+{topic_list}
 
-### Optimization Checklist (High Priority Pages)
-For every page scoring below 70:
-- [ ] **Add clear H2/H3 headings** — AI uses these to understand structure
-- [ ] **Add FAQ section** — Match questions users ask AI about {', '.join(topics)}
-- [ ] **Include specific examples** — Replace vague claims with concrete data
-- [ ] **Add schema markup** — At minimum, FAQ schema for Q&A sections
-- [ ] **Link to authoritative sources** — External citations strengthen trust signals
-- [ ] **Mention {brand} by name** — Don't rely on pronouns; state the brand explicitly
-- [ ] **Expand thin content** — Aim for 1,500+ words for pillar pages, 800+ for supporting pages
+## Evaluation Criteria (Apply to Each URL)
 
-### Content Gaps
-You provided {len(urls)} URLs, but AI needs content covering: {', '.join(topics)}.
-Missing topics represent opportunity — publish new content to fill these gaps.
+### 1. Structural Clarity
+- Does the URL suggest well-organized content? (Clean URL structure, descriptive slugs)
+- Would the content likely have clear headings (H2/H3)?
+- Is the content likely comprehensive enough for AI to cite? (1,500+ words for pillar content)
 
-### Quick Wins (Fix These First)
-Pages scoring 60-69 (Grade C) are easiest to improve:
-1. Add a comprehensive FAQ section (5-10 Q&As)
-2. Break up long paragraphs into bullet points
-3. Add 2-3 specific examples or case studies
-4. Deploy FAQ schema markup
+### 2. AI Discoverability Signals
+- Does {brand} likely use structured data (FAQ, Article, HowTo schema)?
+- Is the content factually dense (specific data, examples, frameworks)?
+- Does the content answer specific questions users ask AI?
 
-This can boost a C to a B in one update cycle.
+### 3. Entity & Brand Signals
+- Does the content clearly identify {brand} and what it does?
+- Are there consistent brand mentions (not just pronouns)?
+- Does the content link to and from authoritative sources?
 
-### Pro Tip
-AI models value **consistency** — if {brand} is described differently across pages, entity clarity suffers. Standardize your core messaging:
-- Use the same brand tagline everywhere
-- Repeat key differentiators across all pages
-- Link related content together (internal linking)
+### 4. Topic Relevance
+- How well does each URL map to the target topics listed above?
+- Are there topic gaps — topics not covered by any URL?
 
-### Next Steps
-1. Prioritize the "High Priority" pages above
-2. Run `content_strategy_generator` for missing topics
-3. Re-audit in 30 days to measure improvement
-"""
+## Response Format
+Rate each URL:
+| URL | Estimated Grade (A-F) | Strengths | Weaknesses | Priority Fixes |
+|-----|----------------------|-----------|------------|----------------|
+
+Then provide:
+- Overall content health assessment
+- Pages most in need of optimization
+- Topic gaps (target topics not covered by any URL)
+- Universal optimization checklist:
+  - [ ] Add clear H2/H3 headings
+  - [ ] Add FAQ section matching user prompts about {topics_joined}
+  - [ ] Include specific examples and data
+  - [ ] Add schema markup (FAQ, Article)
+  - [ ] Mention {brand} explicitly by name
+  - [ ] Expand thin content to 1,500+ words
+  - [ ] Link to authoritative external sources
+
+**Note:** For a more precise audit, the user can provide the actual page content or use a web browsing tool to analyze each URL directly."""
+
 
 def handle_citation_outreach_targets(args: dict) -> str:
     brand = args["brand_name"]
     industry = args["industry"]
     topics = args["topics"]
     count = args.get("target_count", 10)
-    
-    domain_types = [
-        {"type": "Industry Publications", "suffix": "media", "authority": 90},
-        {"type": "News & Analysis", "suffix": "news", "authority": 85},
-        {"type": "Review Sites", "suffix": "reviews", "authority": 80},
-        {"type": "Industry Directories", "suffix": "directory", "authority": 75},
-        {"type": "Podcasts & Interviews", "suffix": "podcast", "authority": 70},
-    ]
-    
-    targets = []
-    for dt in domain_types:
-        for i in range(2):
-            site_name = f"{industry.lower().replace(' ', '')}{dt['suffix']}{i+1}.com"
-            relevance = _score(site_name + topics[0])
-            avg_score = (dt["authority"] + relevance) / 2
-            priority = "Critical" if avg_score > 80 else "High" if avg_score > 70 else "Medium"
-            
-            angle_map = {
-                "Industry Publications": "Guest post or expert roundup",
-                "News & Analysis": "Press release or news story",
-                "Review Sites": "Submit for review or listing",
-                "Industry Directories": "Claim/update profile",
-                "Podcasts & Interviews": "Pitch for interview or feature"
-            }
-            angle = angle_map[dt["type"]]
-            
-            targets.append({
-                "site": site_name,
-                "type": dt["type"],
-                "authority": dt["authority"],
-                "relevance": relevance,
-                "priority": priority,
-                "angle": angle,
-                "avg": avg_score
-            })
-    
-    targets.sort(key=lambda x: x["avg"], reverse=True)
-    top_targets = targets[:count]
-    
-    rows = [
-        f"| {i+1} | {t['site']} | {t['type']} | {t['authority']} | {t['relevance']} | {t['priority']} | {t['angle']} |"
-        for i, t in enumerate(top_targets)
-    ]
-    
+    topic_list = "\n".join(f"- {t}" for t in topics)
+    topics_joined = ", ".join(topics)
+
     return f"""# Citation Outreach Targets — {brand}
-*Generated {datetime.utcnow().strftime('%Y-%m-%d')} · Newtation MCP Server*
+*Generated {_today()} · Newtation MCP*
 
-## Industry: {industry}
-## Top {count} sites to target for backlinks and citations
+## Your Task
+Identify the top {count} real, specific websites and publications that **{brand}** should target for backlinks and citations to improve AI visibility in **{industry}**.
 
-### Why Citations Matter for AI
-When authoritative sites in {industry} mention or link to {brand}, AI:
-- Learns to trust {brand} as a credible source
-- Associates {brand} with those sites' authority
-- Includes {brand} in responses to related queries
-- Cites {brand} when discussing {', '.join(topics)}
+## Topics to Build Citations For
+{topic_list}
 
-### Prioritized Outreach List
-| Rank | Target Site | Type | Authority | Relevance | Priority | Outreach Angle |
-|------|-------------|------|-----------|-----------|----------|----------------|
-{chr(10).join(rows)}
+## Target Categories to Cover
+Recommend real sites from each category:
 
-### Priority Definitions
-- **Critical** — High authority + high relevance — pursue immediately
-- **High** — Strong authority or relevance — pursue within 2 weeks
-- **Medium** — Moderate signals — pursue as bandwidth allows
+### 1. Industry Publications (Highest Priority)
+- Major {industry} publications, trade journals, and industry blogs
+- Sites that AI models frequently cite when discussing {industry}
 
-### Success Metrics
-- **Response rate**: Aim for 20-30% response rate
-- **Conversion rate**: Aim for 10-15% published placements
-- **Timeline**: Expect 8-12 weeks from first pitch to seeing AI impact
-- **Volume**: Target 2-3 new authoritative citations per month
+### 2. News & Analysis
+- Business news sites, analyst publications, and tech press that cover {industry}
+- Sites where press mentions carry significant AI trust weight
 
-### Next Steps
-1. Start with "Critical" priority targets (top 3)
-2. Send 3-5 pitches per week (quality over quantity)
-3. Track responses in a spreadsheet
-4. Re-run this tool quarterly to refresh your target list
-"""
+### 3. Review & Comparison Sites
+- G2, Capterra, Trustpilot, or {industry}-specific review platforms
+- Comparison sites where {brand} should be listed
+
+### 4. Directories & Databases
+- Industry directories, Crunchbase, Product Hunt, or specialized databases
+- Profiles that reinforce entity signals
+
+### 5. Podcasts & Media
+- {industry} podcasts, YouTube channels, or newsletters with interview opportunities
+
+## Response Format
+Provide a ranked list of {count} real websites:
+| Rank | Site | Category | Why Target | Outreach Angle | Priority |
+|------|------|----------|-----------|----------------|----------|
+
+Then provide:
+- Outreach strategy by category (guest post, press pitch, review submission, etc.)
+- A customizable outreach email template
+- Tracking recommendations (pitch date, response, published, link type)
+- Success metrics to aim for (response rates, conversion rates)
+- Timeline expectations
+
+## Why Citations Matter for AI
+When authoritative {industry} sites mention or link to {brand}, AI models:
+- Learn to trust {brand} as a credible source
+- Associate {brand} with those sites' authority
+- Include {brand} in responses to related queries
+- Cite {brand} when discussing {topics_joined}"""
+
 
 def handle_ai_readiness_scorecard(args: dict) -> str:
     brand = args["brand_name"]
     industry = args["industry"]
-    website = args.get("website", "not provided")
+    website = args.get("website")
     competitors = args.get("competitors", [])
     locations = args.get("target_locations", [])
     topics = args.get("topics", [])
 
-    perception_score = _score(brand + industry)
-    entity_score = _score(brand)
-    citation_score = (
-        round(sum(_score(brand + t) for t in topics) / len(topics))
-        if topics else _score(brand + "citation")
-    )
+    context_parts = []
+    if website:
+        context_parts.append(f"- Website: {website}")
     if competitors:
-        competitive_score = round(sum(
-            max(0, 100 - max(0, _score(c + industry) - _score(brand + industry)) * 3)
-            for c in competitors
-        ) / len(competitors))
-    else:
-        competitive_score = _score(brand + "competitive")
-    geo_score = (
-        round(sum(_score(brand + l) for l in locations) / len(locations))
-        if locations else _score(brand + "geo")
+        context_parts.append(f"- Competitors: {', '.join(competitors)}")
+    if locations:
+        context_parts.append(f"- Target locations: {', '.join(locations)}")
+    if topics:
+        context_parts.append(f"- Key topics: {', '.join(topics)}")
+
+    context_block = f"\n## Context\n" + "\n".join(context_parts) + "\n" if context_parts else ""
+
+    citation_line = (
+        f"Would AI cite {brand} for: {', '.join(topics)}?"
+        if topics
+        else f"Does AI cite {brand} as an authority in {industry}?"
     )
-    sentiment_score = _score(brand + "sentiment")
-
-    composite = round(
-        perception_score * 0.2
-        + entity_score * 0.2
-        + citation_score * 0.2
-        + competitive_score * 0.15
-        + geo_score * 0.1
-        + sentiment_score * 0.15
+    competitive_line = (
+        f"How does {brand} compare to {', '.join(competitors)}?"
+        if competitors
+        else f"How does {brand} stack up against competitors in {industry}?"
     )
-
-    if composite > 80: grade, grade_desc = "A", "Excellent — your brand is well-positioned in AI"
-    elif composite > 70: grade, grade_desc = "B", "Good — solid foundation with room to improve"
-    elif composite > 60: grade, grade_desc = "C", "Fair — significant gaps that competitors may be exploiting"
-    elif composite > 50: grade, grade_desc = "D", "Poor — AI has a weak or confused understanding of your brand"
-    else: grade, grade_desc = "F", "Critical — your brand is essentially invisible to AI"
-
-    def tier(s):
-        return "Strong" if s > 75 else "Moderate" if s > 60 else "Weak" if s > 50 else "Critical"
-    def emoji(s):
-        return "+" if s > 75 else "~" if s > 60 else "!" if s > 50 else "X"
-
-    if perception_score <= entity_score and perception_score <= citation_score:
-        action1 = f"1. **Improve AI Perception** ({perception_score}/100): Run `brand_perception_audit` and implement all Quick Wins"
-    elif entity_score <= citation_score:
-        action1 = f"1. **Strengthen Entity Clarity** ({entity_score}/100): Run `entity_clarity_score` and complete the checklist"
-    else:
-        action1 = f"1. **Boost Citations** ({citation_score}/100): Run `citation_check` with your key topics"
-
-    if competitive_score < 65:
-        action2 = f"2. **Close Competitive Gap** ({competitive_score}/100): Run `competitor_comparison` to identify what leaders are doing differently"
-    elif geo_score < 65:
-        action2 = f"2. **Expand Geographic Presence** ({geo_score}/100): Run `geo_recommendations` for your target locations"
-    else:
-        action2 = "2. **Optimize Content Strategy**: Run `content_strategy_generator` with your weak areas"
+    geo_line = (
+        f"Would AI recommend {brand} in: {', '.join(locations)}?"
+        if locations
+        else f"Does {brand} have geographic-specific AI presence?"
+    )
 
     return f"""# AI Readiness Scorecard — {brand}
-*Generated {datetime.utcnow().strftime('%Y-%m-%d')} · Newtation MCP Server*
+*Generated {_today()} · Newtation MCP*
 
----
+## Your Task
+Provide a comprehensive AI readiness assessment for **{brand}** in **{industry}**, scoring across all key dimensions. This is the master audit — be thorough and honest.
+{context_block}
+## Score Each Dimension
 
-## Overall AI Readiness: {composite}/100 — Grade: {grade}
-**{grade_desc}**
+### 1. AI Perception (Weight: 20%)
+How well do AI models know and describe {brand}?
+- Brand recognition, description accuracy, recommendation likelihood
 
----
+### 2. Entity Clarity (Weight: 20%)
+How clearly does AI understand what {brand} is?
+- Identity resolution, attribute completeness, description consistency
 
-### Dimension Scores
-| Dimension | Score | Rating | Status |
-|-----------|-------|--------|--------|
-| AI Perception | {perception_score}/100 | {tier(perception_score)} | `{emoji(perception_score)}` |
-| Entity Clarity | {entity_score}/100 | {tier(entity_score)} | `{emoji(entity_score)}` |
-| Citation Strength | {citation_score}/100 | {tier(citation_score)} | `{emoji(citation_score)}` |
-| Competitive Position | {competitive_score}/100 | {tier(competitive_score)} | `{emoji(competitive_score)}` |
-| Geographic Reach | {geo_score}/100 | {tier(geo_score)} | `{emoji(geo_score)}` |
-| Sentiment | {sentiment_score}/100 | {tier(sentiment_score)} | `{emoji(sentiment_score)}` |
+### 3. Citation Strength (Weight: 20%)
+{citation_line}
+- Citation likelihood, source authority, content depth
 
-### Score Weights
-Perception (20%) + Entity Clarity (20%) + Citations (20%) + Competitive (15%) + Geographic (10%) + Sentiment (15%)
+### 4. Competitive Position (Weight: 15%)
+{competitive_line}
+- Mindshare ranking, differentiation, gap assessment
 
----
+### 5. Geographic Reach (Weight: 10%)
+{geo_line}
+- Location-specific recommendations, local signal strength
+
+### 6. Sentiment (Weight: 15%)
+What tone does AI use when discussing {brand}?
+- Overall sentiment, aspect-by-aspect analysis, confidence level
+
+## Response Format
+
+### Scorecard Table
+| Dimension | Rating (Strong/Moderate/Weak/Unknown) | Key Finding |
+|-----------|--------------------------------------|-------------|
+
+### Overall Assessment
+- Overall AI readiness: **Grade (A-F)** with explanation
+- Grade scale: A (Leader) / B (Strong) / C (Average) / D (Below Average) / F (Invisible)
 
 ### Top 3 Priority Actions
-{action1}
-{action2}
-3. **Expand Reach**: Run `citation_outreach_targets` and `content_audit_for_ai` to find new citation opportunities for {brand}
+Based on the weakest dimensions, provide:
+1. The single most impactful action to take this week
+2. The highest-priority content to create
+3. The most important external citation to earn
+
+### Recommended Audit Sequence
+Based on findings, recommend which Newtation tools to run next:
+1. `brand_perception_audit` — Deep dive into AI perception
+2. `entity_clarity_score` — Fix identity confusion
+3. `citation_check` — Map citation gaps
+4. `competitor_comparison` — Competitive benchmarking
+5. `competitor_gap_analysis` — Topic-level competitive gaps
+6. `prompt_vulnerability_scan` — Find dangerous queries
+7. `sentiment_analysis` — Tone analysis
+8. `content_audit_for_ai` — Score existing content
+9. `content_strategy_generator` — Plan new content
+10. `citation_outreach_targets` — Build citation network"""
+
+
+def handle_generate_audit_queries(args: dict) -> str:
+    brand = args["brand_name"]
+    industry = args["industry"]
+    areas = args.get("focus_areas", [])
+    competitors = args.get("competitor_names", [])
+    year = datetime.utcnow().year
+
+    queries = []
+
+    # Discovery
+    for q in [
+        f"best {industry} companies",
+        f"top {industry} solutions {year}",
+        f"best {industry} tools",
+        f"{industry} recommendations",
+        f"who is the leader in {industry}",
+        f"{industry} market leaders {year}",
+    ]:
+        queries.append((q, "Discovery", "prompt_vulnerability_scan"))
+
+    # Comparison
+    for comp in competitors:
+        queries.append((f"{brand} vs {comp}", "Comparison", "competitor_comparison"))
+        queries.append((f"{comp} alternatives", "Comparison", "competitor_comparison"))
+    queries.append((f"{brand} alternatives", "Comparison", "competitor_comparison"))
+    queries.append((f"compare {industry} solutions", "Comparison", "competitor_comparison"))
+
+    # Reputation
+    for q in [
+        f"is {brand} good",
+        f"{brand} reviews",
+        f"should I use {brand}",
+        f"{brand} pros and cons",
+    ]:
+        queries.append((q, "Reputation", "sentiment_analysis"))
+
+    # Knowledge
+    for q in [
+        f"what does {brand} do",
+        f"what is {brand}",
+        f"who founded {brand}",
+        f"how does {brand} work",
+    ]:
+        queries.append((q, "Knowledge", "entity_clarity_score"))
+
+    # Use-case
+    for area in areas:
+        queries.append((f"best {industry} for {area}", "Use-Case", "citation_check"))
+        queries.append((f"how to improve {area}", "Use-Case", "citation_check"))
+    if not areas:
+        for seg in ["small business", "enterprise", "startups"]:
+            queries.append((f"{industry} for {seg}", "Use-Case", "citation_check"))
+
+    # Geographic
+    for city in ["New York", "London", "San Francisco"]:
+        queries.append((f"best {industry} in {city}", "Geographic", "geo_recommendations"))
+
+    rows = "\n".join(
+        f"| {i+1} | {q} | {cat} | `{tool}` |"
+        for i, (q, cat, tool) in enumerate(queries)
+    )
+    cats = ["Discovery", "Comparison", "Reputation", "Knowledge", "Use-Case", "Geographic"]
+    counts = "\n".join(
+        f"- **{c}**: {sum(1 for _, cat, _ in queries if cat == c)} queries"
+        for c in cats
+    )
+
+    return f"""# AI Audit Queries — {brand}
+*Generated {_today()} · Newtation MCP · {len(queries)} queries generated*
+
+## Generated Query Set
+
+| # | Query | Category | Best Newtation Tool |
+|---|-------|----------|---------------------|
+{rows}
+
+## Summary by Category
+{counts}
+
+## Your Task
+Using the {len(queries)} generated queries above:
+1. **Prioritize** the top 10 most relevant to {brand}'s business goals
+2. **Test each** in ChatGPT, Claude, Perplexity, and Gemini
+3. **Record results**: Was {brand} mentioned? Position? Tone? Who appeared instead?
+4. **Identify patterns**: Which categories are strongest/weakest?
+5. **Run deeper analysis**: Use the "Best Newtation Tool" column for follow-up
+
+## Testing Protocol
+- [ ] Test top 10 queries across all 4 major AI models
+- [ ] Score each: mentioned favorably | mentioned weakly | not mentioned | competitor mentioned instead
+- [ ] Screenshot or record each response as a baseline
+- [ ] Re-test in 30 days after implementing fixes
+- [ ] Focus content strategy on queries where {brand} is absent or weak
+
+## Next Steps by Result
+- **Not mentioned at all** → Run `content_strategy_generator` for those topics
+- **Mentioned but weak** → Run `prompt_vulnerability_scan` with those queries
+- **Competitor dominates** → Run `competitor_gap_analysis` on those topics
+- **Mentioned favorably** → Protect with `citation_check` to maintain position"""
+
+
+def handle_hallucination_check(args: dict) -> str:
+    brand = args["brand_name"]
+    response = args["ai_response"]
+    facts = args.get("known_facts", [])
+    fact_section = (
+        "\n".join(f"{i+1}. {f}" for i, f in enumerate(facts))
+        if facts
+        else "_No known facts provided — use your own knowledge and be explicit about uncertainty._"
+    )
+    cross_ref = "\nCross-reference each claim against the known facts above." if facts else ""
+
+    return f"""# Hallucination Check — {brand}
+*Generated {_today()} · Newtation MCP*
+
+## Your Task
+Fact-check the following AI-generated text about **{brand}**. Identify any claims that are false, unverifiable, outdated, or misleading. Be rigorous — hallucinated facts damage brand trust and spread across models.
+
+## AI Response to Verify
+> {response}
+
+## Known Facts (Ground Truth)
+{fact_section}
+
+## Verification Process
+
+### Step 1: Extract Every Factual Claim
+List each factual claim made about {brand} in the response above:
+- Company descriptions and categorizations
+- Product/service claims
+- Founding date, location, team size
+- Customer claims, metrics, case studies
+- Competitive positioning statements
+- Awards, recognition, partnerships
+
+### Step 2: Verify Each Claim
+For each extracted claim, assign a status:
+- **Verified**: You have strong evidence this is true
+- **Likely True**: Consistent with your knowledge, but not fully confirmed
+- **Unverifiable**: Not enough information to confirm or deny
+- **Likely False**: Contradicts what you know
+- **Hallucinated**: Definitely false or fabricated{cross_ref}
+
+### Step 3: Assess Severity
+For each problematic claim, rate severity:
+- **Critical**: Could cause real harm (wrong product claims, false partnerships, incorrect pricing)
+- **Moderate**: Misleading but not directly harmful (inflated descriptions, vague exaggerations)
+- **Minor**: Small inaccuracies unlikely to cause damage
+
+## Response Format
+
+| # | Claim | Status | Confidence | Severity | Evidence |
+|---|-------|--------|------------|----------|----------|
+
+Then provide:
+- **Hallucination rate**: X of Y claims are problematic
+- **Overall reliability**: High / Moderate / Low / Unreliable
+- **Most dangerous claim**: The single worst hallucination and why it matters
+- **Corrected text**: Rewrite the response with all hallucinations fixed
+- **Prevention checklist**:
+  1. Publish an authoritative About page with explicit, machine-readable facts
+  2. Add Organization schema markup with verified attributes
+  3. Maintain consistent facts across all web properties
+  4. Create a press/media page with verified milestones and stats
+  5. Run `schema_markup_generator` to create machine-readable identity
+  6. Re-run this check monthly to catch new hallucinations"""
+
+
+def handle_schema_markup_generator(args: dict) -> str:
+    brand = args["brand_name"]
+    url = args["url"]
+    description = args["description"]
+    schema_type = args.get("type", "Organization")
+    year = args.get("founding_year")
+    founders = args.get("founders", [])
+    socials = args.get("social_urls", [])
+
+    org = {
+        "@context": "https://schema.org",
+        "@type": schema_type,
+        "@id": f"{url}/#organization",
+        "name": brand,
+        "url": url,
+        "description": description[:300],
+        "logo": {"@type": "ImageObject", "url": f"{url}/logo.png"},
+    }
+    if year:
+        org["foundingDate"] = year
+    if founders:
+        org["founder"] = [{"@type": "Person", "name": f} for f in founders]
+    if socials:
+        org["sameAs"] = socials
+
+    site = {
+        "@context": "https://schema.org",
+        "@type": "WebSite",
+        "name": brand,
+        "url": url,
+        "publisher": {"@id": f"{url}/#organization"},
+    }
+
+    breadcrumb = {
+        "@context": "https://schema.org",
+        "@type": "BreadcrumbList",
+        "itemListElement": [
+            {"@type": "ListItem", "position": 1, "name": "Home", "item": url},
+            {"@type": "ListItem", "position": 2, "name": "TODO: Primary Category", "item": f"{url}/TODO"},
+        ],
+    }
+
+    org_json = json.dumps(org, indent=2)
+    site_json = json.dumps(site, indent=2)
+    bc_json = json.dumps(breadcrumb, indent=2)
+    desc_escaped = description.replace('"', '\\"')
+
+    year_note = "" if year else " Add `foundingDate` if known."
+    social_note = "" if socials else " Add `sameAs` with social profile URLs."
+
+    return f"""# Schema Markup — {brand}
+*Generated {_today()} · Newtation MCP*
+
+Paste-ready JSON-LD for your website's `<head>`. Generated from your inputs — review, customize, and deploy.
 
 ---
 
-### Benchmark Context
-| Grade | What It Means |
-|-------|--------------|
-| A (80+) | Top-tier AI presence — you're being cited and recommended actively |
-| B (70-79) | Above average — solid foundation, optimize for competitive edge |
-| C (60-69) | Average — visible but undifferentiated, competitors likely outranking you |
-| D (50-59) | Below average — significant blind spots in AI's understanding |
-| F (<50) | Invisible — AI doesn't know who you are or gets it wrong |
+## 1. Organization Schema
 
-### Full Audit Recommendation
-Run these tools in order for a complete diagnostic:
-1. `brand_perception_audit` → Understand how AI sees you
-2. `entity_clarity_score` → Fix identity confusion
-3. `citation_check` → Map your citation gaps
-4. `competitor_comparison` → Know where you stand
-5. `competitor_gap_analysis` → Find topics where you're losing to competitors
-6. `prompt_vulnerability_scan` → Find dangerous queries
-7. `sentiment_analysis` → Understand AI's tone about you
-8. `content_audit_for_ai` → Score your existing content
-9. `content_strategy_generator` → Plan what to publish
-10. `citation_outreach_targets` → Get your outreach target list
-"""
+```html
+<script type="application/ld+json">
+{org_json}
+</script>
+```
+
+**Review**: Replace `logo.png` with your actual logo path.{year_note}{social_note}
+
+---
+
+## 2. WebSite Schema
+
+```html
+<script type="application/ld+json">
+{site_json}
+</script>
+```
+
+---
+
+## 3. BreadcrumbList Schema
+
+```html
+<script type="application/ld+json">
+{bc_json}
+</script>
+```
+
+**Review**: Replace the `TODO` values with your actual primary service category and URL.
+
+---
+
+## 4. FAQ Schema (Generate This Next)
+
+### Your Task
+Generate a FAQPage schema block with 5-8 Q&A entries for **{brand}**. Use this starter:
+
+```html
+<script type="application/ld+json">
+{{
+  "@context": "https://schema.org",
+  "@type": "FAQPage",
+  "mainEntity": [
+    {{
+      "@type": "Question",
+      "name": "What does {brand} do?",
+      "acceptedAnswer": {{
+        "@type": "Answer",
+        "text": "{desc_escaped}"
+      }}
+    }}
+  ]
+}}
+</script>
+```
+
+Add 4-7 more Q&A pairs covering:
+- Who is {brand} for? (target audience)
+- How is {brand} different from competitors?
+- How does {brand} work?
+- What does {brand} cost?
+- How do I get started with {brand}?
+
+Each answer should be factual and specific — AI models extract FAQ content for training data.
+
+---
+
+## Validation Checklist
+- [ ] Paste each block into [Google Rich Results Test](https://search.google.com/test/rich-results)
+- [ ] Validate at [Schema.org Validator](https://validator.schema.org/)
+- [ ] Replace `logo.png` with actual logo path
+- [ ] Replace all `TODO:` placeholders
+- [ ] Verify all URLs are correct and live
+- [ ] Deploy to every page's `<head>` (at minimum: homepage)
+- [ ] Request re-indexing via Google Search Console
+
+## Why This Matters
+Schema markup is the most direct way to tell AI models who you are:
+- **Organization schema** creates a canonical machine-readable identity
+- **FAQ schema** feeds directly into AI training pipelines and featured snippets
+- **WebSite schema** establishes your domain as an authoritative source
+- This is the single highest-ROI technical fix for AI visibility"""
+
 
 # ─── Tool Dispatch ─────────────────────────────────────────────────────────────
 
@@ -1142,6 +1499,9 @@ HANDLERS = {
     "content_audit_for_ai": handle_content_audit_for_ai,
     "citation_outreach_targets": handle_citation_outreach_targets,
     "ai_readiness_scorecard": handle_ai_readiness_scorecard,
+    "generate_audit_queries": handle_generate_audit_queries,
+    "hallucination_check": handle_hallucination_check,
+    "schema_markup_generator": handle_schema_markup_generator,
 }
 
 def call_tool(name: str, args: dict) -> str:
@@ -1149,6 +1509,132 @@ def call_tool(name: str, args: dict) -> str:
     if not handler:
         raise ValueError(f"Unknown tool: {name}")
     return handler(args)
+
+# ─── MCP Prompt Templates ──────────────────────────────────────────────────────
+
+PROMPTS = [
+    {
+        "name": "full_brand_audit",
+        "description": "Run a comprehensive AI presence audit across all dimensions — perception, entity clarity, citations, competitive position, and more",
+        "arguments": [
+            {"name": "brand_name", "description": "Brand name to audit", "required": True},
+            {"name": "industry", "description": "Industry or category", "required": True},
+            {"name": "website", "description": "Brand website URL", "required": False},
+            {"name": "competitors", "description": "Comma-separated competitor names", "required": False},
+        ],
+    },
+    {
+        "name": "quick_health_check",
+        "description": "Fast 2-tool check to see how visible your brand is in AI — perfect for a first look",
+        "arguments": [
+            {"name": "brand_name", "description": "Brand name", "required": True},
+            {"name": "industry", "description": "Industry", "required": True},
+        ],
+    },
+    {
+        "name": "competitive_deep_dive",
+        "description": "Head-to-head competitive analysis — find where you're losing AI mindshare and how to win it back",
+        "arguments": [
+            {"name": "brand_name", "description": "Your brand name", "required": True},
+            {"name": "competitors", "description": "Comma-separated competitor names", "required": True},
+            {"name": "industry", "description": "Industry or category", "required": True},
+        ],
+    },
+    {
+        "name": "fix_my_ai_presence",
+        "description": "Get actionable fixes you can deploy this week — schema markup, content plan, and hallucination cleanup",
+        "arguments": [
+            {"name": "brand_name", "description": "Brand name", "required": True},
+            {"name": "url", "description": "Brand website URL", "required": True},
+            {"name": "description", "description": "What your brand does (1-2 sentences)", "required": True},
+        ],
+    },
+]
+
+def _prompt_full_brand_audit(args: dict) -> dict:
+    brand = args.get("brand_name", "")
+    industry = args.get("industry", "")
+    website = args.get("website", "")
+    competitors = args.get("competitors", "")
+    parts = [
+        f'Run a comprehensive AI presence audit for "{brand}" in {industry}{f" ({website})" if website else ""}.',
+        f"Compare against: {competitors}." if competitors else "",
+        "",
+        "Run these tools in order, analyzing the results of each before proceeding:",
+        "1. `ai_readiness_scorecard` — get the overall picture",
+        "2. `entity_clarity_score` — check if AI knows who we are",
+        "3. `brand_perception_audit` — detailed perception analysis",
+        "4. `citation_check` with 5 key industry topics",
+        "5. `generate_audit_queries` — create a visibility testing plan",
+        "",
+        "After all tools complete, provide an executive summary with: overall grade, top 3 critical findings, and a 30-day action plan.",
+    ]
+    return {"messages": [{"role": "user", "content": {"type": "text", "text": "\n".join(p for p in parts if p or p == "")}}]}
+
+def _prompt_quick_health_check(args: dict) -> dict:
+    brand = args.get("brand_name", "")
+    industry = args.get("industry", "")
+    return {
+        "messages": [{
+            "role": "user",
+            "content": {
+                "type": "text",
+                "text": f'Quick AI health check for "{brand}" in {industry}.\n\nRun `entity_clarity_score` and `brand_perception_audit`, then give me a 1-paragraph summary: how visible is my brand in AI, and what\'s the single most important thing to fix?',
+            },
+        }],
+    }
+
+def _prompt_competitive_deep_dive(args: dict) -> dict:
+    brand = args.get("brand_name", "")
+    competitors = args.get("competitors", "")
+    industry = args.get("industry", "")
+    return {
+        "messages": [{
+            "role": "user",
+            "content": {
+                "type": "text",
+                "text": "\n".join([
+                    f'Deep competitive analysis: "{brand}" vs {competitors} in {industry}.',
+                    "",
+                    "1. Run `competitor_comparison` to see who's winning AI mindshare",
+                    "2. Run `competitor_gap_analysis` with 5 key industry topics",
+                    "3. Run `generate_audit_queries` with the competitor names",
+                    "",
+                    "Synthesize into: who's the AI visibility leader, where are we losing, and what's the fastest way to close the gap.",
+                ]),
+            },
+        }],
+    }
+
+def _prompt_fix_my_ai_presence(args: dict) -> dict:
+    brand = args.get("brand_name", "")
+    url = args.get("url", "")
+    description = args.get("description", "")
+    return {
+        "messages": [{
+            "role": "user",
+            "content": {
+                "type": "text",
+                "text": "\n".join([
+                    f'I need to fix "{brand}"\'s AI presence. Website: {url}. We are: {description}',
+                    "",
+                    "1. Run `entity_clarity_score` with my description",
+                    "2. Run `hallucination_check` — ask yourself what you know about my brand, then verify it",
+                    "3. Run `schema_markup_generator` to generate paste-ready JSON-LD",
+                    "4. Run `content_strategy_generator` based on any weak areas found",
+                    "",
+                    "Give me a prioritized fix list I can execute this week, starting with the schema markup code.",
+                ]),
+            },
+        }],
+    }
+
+PROMPT_HANDLERS = {
+    "full_brand_audit": _prompt_full_brand_audit,
+    "quick_health_check": _prompt_quick_health_check,
+    "competitive_deep_dive": _prompt_competitive_deep_dive,
+    "fix_my_ai_presence": _prompt_fix_my_ai_presence,
+}
 
 # ─── MCP Message Router ────────────────────────────────────────────────────────
 
@@ -1163,11 +1649,11 @@ def handle_message(msg: dict) -> dict | None:
     if method == "initialize":
         return ok_response(req_id, {
             "protocolVersion": "2024-11-05",
-            "capabilities": {"tools": {}},
+            "capabilities": {"tools": {}, "prompts": {}},
             "serverInfo": {
                 "name": "newtation-mcp",
-                "version": "1.0.0",
-                "description": "AI brand presence auditing tools by Newtation"
+                "version": "2.0.0",
+                "description": "AI brand presence auditing tools by Newtation — 15 tools + 4 prompt workflows"
             }
         })
 
@@ -1183,6 +1669,22 @@ def handle_message(msg: dict) -> dict | None:
             return ok_response(req_id, {
                 "content": [{"type": "text", "text": result}]
             })
+        except Exception as e:
+            return error_response(req_id, -32603, str(e))
+
+    if method == "prompts/list":
+        return ok_response(req_id, {"prompts": PROMPTS})
+
+    if method == "prompts/get":
+        params = msg.get("params", {})
+        prompt_name = params.get("name", "")
+        prompt_args = params.get("arguments", {})
+        prompt_handler = PROMPT_HANDLERS.get(prompt_name)
+        if not prompt_handler:
+            return error_response(req_id, -32602, f"Unknown prompt: {prompt_name}")
+        try:
+            result = prompt_handler(prompt_args)
+            return ok_response(req_id, result)
         except Exception as e:
             return error_response(req_id, -32603, str(e))
 

@@ -1,27 +1,32 @@
 /**
  * Newtation AI Presence MCP Server — Remote (Cloudflare Workers)
  *
- * Exposes 12 brand auditing tools via the MCP protocol over Streamable HTTP,
- * with GitHub OAuth for authentication. Deployable to Cloudflare Workers.
+ * Exposes 15 brand auditing tools + 4 prompt templates via MCP over
+ * Streamable HTTP, with GitHub OAuth. Deployable to Cloudflare Workers.
  *
- * Core Audit:
+ * Core Audit (5):
  *   - brand_perception_audit      : How AI describes your brand overall
  *   - citation_check              : Whether AI cites your brand as a source
  *   - competitor_comparison       : How your brand stacks up vs competitors in AI
  *   - entity_clarity_score        : How clearly AI understands what your brand is
  *   - geo_recommendations         : Whether AI recommends your brand by location
  *
- * Diagnostics:
+ * Diagnostics (3):
  *   - prompt_vulnerability_scan   : Find prompts where AI gives wrong/weak answers
  *   - sentiment_analysis          : Likely tone when AI discusses your brand
+ *   - hallucination_check         : Verify AI claims about your brand
  *
- * Strategy & Output:
+ * Strategy & Output (5):
  *   - content_strategy_generator  : Prioritized content plan from weak areas
  *   - competitor_gap_analysis     : Topics where competitors have stronger AI visibility
  *   - content_audit_for_ai        : Scores existing content for AI discoverability
  *   - citation_outreach_targets   : High-authority sites to target for backlinks
+ *   - schema_markup_generator     : Generate paste-ready AI-optimized JSON-LD
  *
- * Summary:
+ * Generators (1):
+ *   - generate_audit_queries      : Auto-generate categorized visibility test queries
+ *
+ * Summary (1):
  *   - ai_readiness_scorecard      : Full composite score across all dimensions
  */
 
@@ -40,8 +45,11 @@ import {
   contentAuditForAI,
   contentStrategyGenerator,
   entityClarityScore,
+  generateAuditQueries,
   geoRecommendations,
+  hallucinationCheck,
   promptVulnerabilityScan,
+  schemaMarkupGenerator,
   sentimentAnalysis,
 } from "./tools";
 
@@ -50,6 +58,13 @@ const READ_ONLY_ANNOTATIONS = {
   readOnlyHint: true,
   destructiveHint: false,
   openWorldHint: false,
+} as const;
+
+// Tools that fetch external URLs (websites, DNS) for live analysis
+const OPEN_WORLD_ANNOTATIONS = {
+  readOnlyHint: true,
+  destructiveHint: false,
+  openWorldHint: true,
 } as const;
 
 // Props passed through from the OAuth flow, available as this.props
@@ -63,27 +78,27 @@ type Props = {
 export class NewtationMCP extends McpAgent<Env, Record<string, never>, Props> {
   server = new McpServer({
     name: "newtation-mcp",
-    version: "1.0.0",
+    version: "2.0.0",
   });
 
   async init() {
     // ── brand_perception_audit ──────────────────────────────────────────
     this.server.tool(
       "brand_perception_audit",
-      "Analyze how AI language models currently perceive and describe your brand. " +
-        "Returns a structured audit covering tone, category placement, trust signals, " +
-        "and recommended prompts you can use to test your own AI presence.",
+      "Analyze how AI models perceive your brand. If a website URL is provided, " +
+        "performs live page fetching to analyze HTML, meta tags, schema markup, DNS, " +
+        "and computes an AI-readability score. Combines real data with LLM perception analysis.",
       {
         brand_name: z.string().describe("The brand or company name to audit (e.g. 'Newtation')"),
         industry: z.string().describe("Industry or category (e.g. 'SEO agency', 'SaaS', 'e-commerce')"),
         website: z.string().optional().describe("Brand website URL (optional, used for context)"),
       },
-      { title: "Brand Perception Audit", ...READ_ONLY_ANNOTATIONS },
+      { title: "Brand Perception Audit", ...OPEN_WORLD_ANNOTATIONS },
       async ({ brand_name, industry, website }) => ({
         content: [
           {
             type: "text" as const,
-            text: brandPerceptionAudit({ brand_name, industry, website }),
+            text: await brandPerceptionAudit({ brand_name, industry, website }),
           },
         ],
       }),
@@ -137,21 +152,23 @@ export class NewtationMCP extends McpAgent<Env, Record<string, never>, Props> {
     // ── entity_clarity_score ────────────────────────────────────────────
     this.server.tool(
       "entity_clarity_score",
-      "Score how clearly AI models understand what your brand is, what it does, " +
-        "and who it serves. Returns a 0-100 score with specific fixes.",
+      "Score how clearly AI models understand your brand. If a website is provided, " +
+        "fetches it live to verify entity signals (brand in title, meta, schema). " +
+        "Returns entity clarity assessment with specific fixes.",
       {
         brand_name: z.string().describe("Brand name to score"),
         tagline_or_description: z
           .string()
           .optional()
           .describe("Your brand's own description of itself (from homepage or About page)"),
+        website: z.string().optional().describe("Brand website URL for live entity signal verification"),
       },
-      { title: "Entity Clarity Score", ...READ_ONLY_ANNOTATIONS },
-      async ({ brand_name, tagline_or_description }) => ({
+      { title: "Entity Clarity Score", ...OPEN_WORLD_ANNOTATIONS },
+      async ({ brand_name, tagline_or_description, website }) => ({
         content: [
           {
             type: "text" as const,
-            text: entityClarityScore({ brand_name, tagline_or_description }),
+            text: await entityClarityScore({ brand_name, tagline_or_description, website }),
           },
         ],
       }),
@@ -293,9 +310,9 @@ export class NewtationMCP extends McpAgent<Env, Record<string, never>, Props> {
     // ── content_audit_for_ai ────────────────────────────────────────────
     this.server.tool(
       "content_audit_for_ai",
-      "Audit existing content and score it for AI discoverability. Analyzes how well " +
-        "AI can understand, cite, and reference your content. Returns grades and " +
-        "optimization recommendations for each URL.",
+      "Fetches up to 10 content URLs live, parses HTML, and scores each for AI " +
+        "discoverability (meta tags, schema, headings, word count, links). Returns " +
+        "per-page AI-readability grades and cross-page issue summary.",
       {
         brand_name: z.string().describe("Brand name"),
         content_urls: z
@@ -309,12 +326,12 @@ export class NewtationMCP extends McpAgent<Env, Record<string, never>, Props> {
             "Topics you want your content to be discoverable for",
           ),
       },
-      { title: "Content Audit for AI", ...READ_ONLY_ANNOTATIONS },
+      { title: "Content Audit for AI", ...OPEN_WORLD_ANNOTATIONS },
       async ({ brand_name, content_urls, target_topics }) => ({
         content: [
           {
             type: "text" as const,
-            text: contentAuditForAI({ brand_name, content_urls, target_topics }),
+            text: await contentAuditForAI({ brand_name, content_urls, target_topics }),
           },
         ],
       }),
@@ -353,9 +370,9 @@ export class NewtationMCP extends McpAgent<Env, Record<string, never>, Props> {
     // ── ai_readiness_scorecard ──────────────────────────────────────────
     this.server.tool(
       "ai_readiness_scorecard",
-      "Get a comprehensive AI readiness score across all dimensions: perception, " +
-        "entity clarity, citations, competitive position, geographic reach, and " +
-        "sentiment. Returns a letter grade (A-F) with prioritized next steps.",
+      "Comprehensive AI readiness score. If a website is provided, fetches it live " +
+        "for technical scoring (HTML, meta, schema, DNS). Evaluates 6 dimensions: " +
+        "perception, entity clarity, citations, competition, geography, sentiment.",
       {
         brand_name: z.string().describe("Brand name to score"),
         industry: z.string().describe("Your industry or category"),
@@ -373,12 +390,226 @@ export class NewtationMCP extends McpAgent<Env, Record<string, never>, Props> {
           .optional()
           .describe("Key topics for citation scoring"),
       },
-      { title: "AI Readiness Scorecard", ...READ_ONLY_ANNOTATIONS },
+      { title: "AI Readiness Scorecard", ...OPEN_WORLD_ANNOTATIONS },
       async ({ brand_name, industry, website, competitors, target_locations, topics }) => ({
         content: [
           {
             type: "text" as const,
-            text: aiReadinessScorecard({ brand_name, industry, website, competitors, target_locations, topics }),
+            text: await aiReadinessScorecard({ brand_name, industry, website, competitors, target_locations, topics }),
+          },
+        ],
+      }),
+    );
+
+    // ── generate_audit_queries ──────────────────────────────────────────
+    this.server.tool(
+      "generate_audit_queries",
+      "Generate a comprehensive set of queries to test your brand's AI visibility. " +
+        "Creates categorized queries (discovery, comparison, reputation, use-case) " +
+        "with a testing protocol and maps each query to the best Newtation tool.",
+      {
+        brand_name: z.string().describe("Brand name"),
+        industry: z.string().describe("Industry or category"),
+        focus_areas: z
+          .array(z.string())
+          .optional()
+          .describe("Specific topics or services to focus on"),
+        competitor_names: z
+          .array(z.string())
+          .optional()
+          .describe("Known competitors to include in comparison queries"),
+      },
+      { title: "Generate Audit Queries", ...READ_ONLY_ANNOTATIONS },
+      async ({ brand_name, industry, focus_areas, competitor_names }) => ({
+        content: [
+          {
+            type: "text" as const,
+            text: generateAuditQueries({ brand_name, industry, focus_areas, competitor_names }),
+          },
+        ],
+      }),
+    );
+
+    // ── hallucination_check ─────────────────────────────────────────────
+    this.server.tool(
+      "hallucination_check",
+      "Fact-check AI-generated text about your brand. If a website is provided, " +
+        "fetches it live to extract ground-truth facts from HTML and schema markup. " +
+        "Returns claim-by-claim verification with severity ratings.",
+      {
+        brand_name: z.string().describe("Brand name to verify claims about"),
+        ai_response: z.string().describe("The AI-generated text to fact-check"),
+        known_facts: z
+          .array(z.string())
+          .optional()
+          .describe("Known true facts about your brand to cross-reference against"),
+        website: z.string().optional().describe("Brand website URL — fetched live for ground-truth extraction"),
+      },
+      { title: "Hallucination Check", ...OPEN_WORLD_ANNOTATIONS },
+      async ({ brand_name, ai_response, known_facts, website }) => ({
+        content: [
+          {
+            type: "text" as const,
+            text: await hallucinationCheck({ brand_name, ai_response, known_facts, website }),
+          },
+        ],
+      }),
+    );
+
+    // ── schema_markup_generator ──────────────────────────────────────────
+    this.server.tool(
+      "schema_markup_generator",
+      "Fetches your website to detect existing JSON-LD schema, then generates " +
+        "paste-ready markup for what's missing (Organization, WebSite, FAQ, " +
+        "BreadcrumbList). The highest-ROI technical fix for AI visibility.",
+      {
+        brand_name: z.string().describe("Brand name"),
+        url: z.string().describe("Brand website URL (e.g. 'https://example.com')"),
+        description: z.string().describe("What your brand does (1-2 sentences)"),
+        type: z
+          .string()
+          .optional()
+          .describe("Schema type: 'Organization', 'LocalBusiness', or 'Product' (default: Organization)"),
+        founding_year: z.string().optional().describe("Year the brand was founded"),
+        founders: z.array(z.string()).optional().describe("Founder names"),
+        social_urls: z
+          .array(z.string())
+          .optional()
+          .describe("Social profile URLs (LinkedIn, Twitter, etc.)"),
+      },
+      { title: "Schema Markup Generator", ...OPEN_WORLD_ANNOTATIONS },
+      async ({ brand_name, url, description, type, founding_year, founders, social_urls }) => ({
+        content: [
+          {
+            type: "text" as const,
+            text: await schemaMarkupGenerator({
+              brand_name,
+              url,
+              description,
+              type,
+              founding_year,
+              founders,
+              social_urls,
+            }),
+          },
+        ],
+      }),
+    );
+
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    // Prompt Templates
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+    this.server.prompt(
+      "full_brand_audit",
+      "Run a comprehensive AI presence audit across all dimensions — perception, entity clarity, citations, competitive position, and more",
+      {
+        brand_name: z.string().describe("Brand name to audit"),
+        industry: z.string().describe("Industry or category"),
+        website: z.string().optional().describe("Brand website URL"),
+        competitors: z.string().optional().describe("Comma-separated competitor names"),
+      },
+      async ({ brand_name, industry, website, competitors }) => ({
+        messages: [
+          {
+            role: "user" as const,
+            content: {
+              type: "text" as const,
+              text: [
+                `Run a comprehensive AI presence audit for "${brand_name}" in ${industry}${website ? ` (${website})` : ""}.`,
+                competitors ? `Compare against: ${competitors}.` : "",
+                "",
+                "Run these tools in order, analyzing the results of each before proceeding:",
+                "1. `ai_readiness_scorecard` — get the overall picture",
+                "2. `entity_clarity_score` — check if AI knows who we are",
+                "3. `brand_perception_audit` — detailed perception analysis",
+                "4. `citation_check` with 5 key industry topics",
+                "5. `generate_audit_queries` — create a visibility testing plan",
+                "",
+                "After all tools complete, provide an executive summary with: overall grade, top 3 critical findings, and a 30-day action plan.",
+              ]
+                .filter(Boolean)
+                .join("\n"),
+            },
+          },
+        ],
+      }),
+    );
+
+    this.server.prompt(
+      "quick_health_check",
+      "Fast 2-tool check to see how visible your brand is in AI — perfect for a first look",
+      {
+        brand_name: z.string().describe("Brand name"),
+        industry: z.string().describe("Industry"),
+      },
+      async ({ brand_name, industry }) => ({
+        messages: [
+          {
+            role: "user" as const,
+            content: {
+              type: "text" as const,
+              text: `Quick AI health check for "${brand_name}" in ${industry}.\n\nRun \`entity_clarity_score\` and \`brand_perception_audit\`, then give me a 1-paragraph summary: how visible is my brand in AI, and what's the single most important thing to fix?`,
+            },
+          },
+        ],
+      }),
+    );
+
+    this.server.prompt(
+      "competitive_deep_dive",
+      "Head-to-head competitive analysis — find where you're losing AI mindshare and how to win it back",
+      {
+        brand_name: z.string().describe("Your brand name"),
+        competitors: z.string().describe("Comma-separated competitor names"),
+        industry: z.string().describe("Industry or category"),
+      },
+      async ({ brand_name, competitors, industry }) => ({
+        messages: [
+          {
+            role: "user" as const,
+            content: {
+              type: "text" as const,
+              text: [
+                `Deep competitive analysis: "${brand_name}" vs ${competitors} in ${industry}.`,
+                "",
+                "1. Run `competitor_comparison` to see who's winning AI mindshare",
+                "2. Run `competitor_gap_analysis` with 5 key industry topics",
+                "3. Run `generate_audit_queries` with the competitor names",
+                "",
+                "Synthesize into: who's the AI visibility leader, where are we losing, and what's the fastest way to close the gap.",
+              ].join("\n"),
+            },
+          },
+        ],
+      }),
+    );
+
+    this.server.prompt(
+      "fix_my_ai_presence",
+      "Get actionable fixes you can deploy this week — schema markup, content plan, and hallucination cleanup",
+      {
+        brand_name: z.string().describe("Brand name"),
+        url: z.string().describe("Brand website URL"),
+        description: z.string().describe("What your brand does (1-2 sentences)"),
+      },
+      async ({ brand_name, url, description }) => ({
+        messages: [
+          {
+            role: "user" as const,
+            content: {
+              type: "text" as const,
+              text: [
+                `I need to fix "${brand_name}"'s AI presence. Website: ${url}. We are: ${description}`,
+                "",
+                "1. Run `entity_clarity_score` with my description",
+                "2. Run `hallucination_check` — ask yourself what you know about my brand, then verify it",
+                "3. Run `schema_markup_generator` to generate paste-ready JSON-LD",
+                "4. Run `content_strategy_generator` based on any weak areas found",
+                "",
+                "Give me a prioritized fix list I can execute this week, starting with the schema markup code.",
+              ].join("\n"),
+            },
           },
         ],
       }),

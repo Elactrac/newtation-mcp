@@ -1,126 +1,1391 @@
 /**
- * Newtation AI Presence Tools
+ * Newtation AI Presence Tools v2.0
  *
- * 12 brand auditing tools for the Newtation MCP Server.
- * Each returns structured markdown content.
+ * 15 brand-auditing tools with live web fetching, HTML analysis,
+ * DNS lookups via Cloudflare DNS-over-HTTPS, and computed AI-readability
+ * scores. Runs on Cloudflare Workers.
  *
- * Core Audit (5):
- *   - brandPerceptionAudit       : Overall AI perception snapshot
- *   - citationCheck              : Topic-by-topic citation status
- *   - competitorComparison       : You vs competitors in AI
- *   - entityClarityScore         : Does AI know what you are?
- *   - geoRecommendations         : Location-based AI visibility
+ * LIVE ANALYSIS (6 tools — fetch real pages, parse HTML, compute scores):
+ *   brandPerceptionAudit      Fetch website + DNS, score AI signals, LLM perception
+ *   entityClarityScore        Verify brand entity signals in live HTML
+ *   contentAuditForAI         Fetch all URLs, score each for AI readability
+ *   aiReadinessScorecard      Full technical audit + DNS + composite score
+ *   hallucinationCheck        Fetch website for ground-truth extraction
+ *   schemaMarkupGenerator     Detect existing schema, generate only what's missing
  *
- * Diagnostics (2):
- *   - promptVulnerabilityScan    : Find prompts where AI gives wrong/weak answers
- *   - sentimentAnalysis          : Likely tone when AI discusses your brand
+ * ALGORITHMIC (1 tool):
+ *   generateAuditQueries      Generate categorized visibility-test query sets
  *
- * Strategy & Output (4):
- *   - contentStrategyGenerator   : Prioritized content plan from weak areas
- *   - competitorGapAnalysis      : Topics where competitors have stronger AI visibility
- *   - contentAuditForAI          : Scores existing content for AI discoverability
- *   - citationOutreachTargets    : High-authority sites to target for backlinks
- *
- * Summary (1):
- *   - aiReadinessScorecard       : Full composite score across all dimensions
+ * LLM SELF-ASSESSMENT (8 tools — LLM's own knowledge IS the data source):
+ *   citationCheck             Would AI cite your brand? Only AI can answer.
+ *   competitorComparison      How does AI rank you vs competitors?
+ *   geoRecommendations        Would AI recommend you by location?
+ *   promptVulnerabilityScan   How would AI respond to these prompts?
+ *   sentimentAnalysis         What tone does AI use about your brand?
+ *   contentStrategyGenerator  AI-informed content priority plan
+ *   competitorGapAnalysis     Where competitors outperform you in AI
+ *   citationOutreachTargets   High-authority sites AI trusts
  */
 
-/** Deterministic score from a string (for demo consistency). */
-function score(text: string): number {
-  let sum = 0;
-  for (let i = 0; i < text.length; i++) {
-    sum += text.charCodeAt(i);
-  }
-  return 40 + (sum % 51);
+// ── Constants ────────────────────────────────────────────────────────────────
+
+const FENCE = "```";
+const BT = "`";
+
+// ── Types ────────────────────────────────────────────────────────────────────
+
+interface PageAnalysis {
+  url: string;
+  finalUrl: string;
+  status: number;
+  redirected: boolean;
+  responseTimeMs: number;
+  title: string;
+  metaDescription: string;
+  ogTitle: string;
+  ogDescription: string;
+  ogImage: string;
+  canonical: string;
+  robots: string;
+  lang: string;
+  schemaObjects: Record<string, unknown>[];
+  schemaTypes: string[];
+  h1s: string[];
+  h2s: string[];
+  h3s: string[];
+  wordCount: number;
+  internalLinks: number;
+  externalLinks: number;
+  hasHttps: boolean;
+  error?: string;
 }
+
+interface DNSResult {
+  hasA: boolean;
+  hasMX: boolean;
+  txtRecords: string[];
+  error?: string;
+}
+
+interface ScoreItem {
+  name: string;
+  score: number;
+  max: number;
+  detail: string;
+}
+
+interface ScoreBreakdown {
+  total: number;
+  max: number;
+  pct: number;
+  grade: string;
+  items: ScoreItem[];
+}
+
+// ── Helpers ──────────────────────────────────────────────────────────────────
 
 function today(): string {
   return new Date().toISOString().slice(0, 10);
 }
 
-// ── Tool Handlers ────────────────────────────────────────────────────────────
+function normalizeUrl(raw: string): string {
+  const u = raw.trim();
+  return /^https?:\/\//i.test(u) ? u : "https://" + u;
+}
 
-export function brandPerceptionAudit(args: {
+function getDomain(url: string): string {
+  try {
+    return new URL(normalizeUrl(url)).hostname;
+  } catch {
+    return url.replace(/^https?:\/\//i, "").split("/")[0];
+  }
+}
+
+/** Block private/internal IPs and non-HTTP schemes to prevent SSRF. */
+function isPublicUrl(raw: string): boolean {
+  try {
+    const u = new URL(normalizeUrl(raw));
+    if (u.protocol !== "https:" && u.protocol !== "http:") return false;
+    const h = u.hostname.toLowerCase();
+    if (
+      h === "localhost" ||
+      h === "127.0.0.1" ||
+      h === "::1" ||
+      h === "0.0.0.0" ||
+      h.endsWith(".local") ||
+      h.endsWith(".internal")
+    )
+      return false;
+    const p = h.split(".");
+    if (p.length === 4 && p.every((s) => /^\d+$/.test(s))) {
+      const [a, b] = p.map(Number);
+      if (
+        a === 10 ||
+        a === 0 ||
+        (a === 172 && b >= 16 && b <= 31) ||
+        (a === 192 && b === 168) ||
+        (a === 169 && b === 254)
+      )
+        return false;
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// ── HTML Extraction ──────────────────────────────────────────────────────────
+
+function extractTitle(html: string): string {
+  const m = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
+  return m ? m[1].replace(/\s+/g, " ").trim() : "";
+}
+
+function extractMeta(html: string, nameOrProp: string): string {
+  for (const attr of ["name", "property"]) {
+    const r1 = new RegExp(
+      "<meta[^>]*" + attr + '=["\']' + nameOrProp + '["\']+[^>]*content=["\']([^"\']*)["\']',
+      "i",
+    );
+    const m1 = html.match(r1);
+    if (m1) return m1[1];
+    const r2 = new RegExp(
+      '<meta[^>]*content=["\']([^"\']*)["\'][^>]*' + attr + '=["\']' + nameOrProp + '["\']',
+      "i",
+    );
+    const m2 = html.match(r2);
+    if (m2) return m2[1];
+  }
+  return "";
+}
+
+function extractCanonical(html: string): string {
+  const m =
+    html.match(/<link[^>]*rel=["']canonical["'][^>]*href=["']([^"']*)["']/i) ||
+    html.match(/<link[^>]*href=["']([^"']*)["'][^>]*rel=["']canonical["']/i);
+  return m ? m[1] : "";
+}
+
+function extractLang(html: string): string {
+  const m = html.match(/<html[^>]*lang=["']([^"']*)["']/i);
+  return m ? m[1] : "";
+}
+
+function extractSchema(html: string): Record<string, unknown>[] {
+  const out: Record<string, unknown>[] = [];
+  const re =
+    /<script\s+type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(html))) {
+    try {
+      const parsed = JSON.parse(m[1].trim());
+      if (Array.isArray(parsed)) out.push(...parsed);
+      else out.push(parsed);
+    } catch {
+      /* skip malformed JSON-LD */
+    }
+  }
+  return out;
+}
+
+function extractHeadings(html: string, tag: string): string[] {
+  const out: string[] = [];
+  const re = new RegExp("<" + tag + "[^>]*>([\\s\\S]*?)<\\/" + tag + ">", "gi");
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(html))) {
+    const text = m[1].replace(/<[^>]+>/g, "").trim();
+    if (text) out.push(text);
+  }
+  return out;
+}
+
+function countWords(html: string): number {
+  const body = html.match(/<body[^>]*>([\s\S]*)<\/body>/i)?.[1] ?? html;
+  const text = body
+    .replace(/<script[\s\S]*?<\/script>/gi, "")
+    .replace(/<style[\s\S]*?<\/style>/gi, "")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  return text ? text.split(/\s+/).length : 0;
+}
+
+function countLinks(
+  html: string,
+  domain: string,
+): [internal: number, external: number] {
+  const re = /<a\s[^>]*href=["']([^"'#]*?)["']/gi;
+  let int = 0;
+  let ext = 0;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(html))) {
+    const href = m[1];
+    if (!href || /^(mailto|tel|javascript):/.test(href)) continue;
+    if (href.startsWith("/") || href.includes(domain)) int++;
+    else if (href.startsWith("http")) ext++;
+  }
+  return [int, ext];
+}
+
+// ── Live Page Fetching (Cloudflare Workers fetch) ────────────────────────────
+
+async function fetchPage(rawUrl: string): Promise<PageAnalysis> {
+  const url = normalizeUrl(rawUrl);
+  const domain = getDomain(url);
+  const empty: PageAnalysis = {
+    url,
+    finalUrl: url,
+    status: 0,
+    redirected: false,
+    responseTimeMs: 0,
+    title: "",
+    metaDescription: "",
+    ogTitle: "",
+    ogDescription: "",
+    ogImage: "",
+    canonical: "",
+    robots: "",
+    lang: "",
+    schemaObjects: [],
+    schemaTypes: [],
+    h1s: [],
+    h2s: [],
+    h3s: [],
+    wordCount: 0,
+    internalLinks: 0,
+    externalLinks: 0,
+    hasHttps: url.startsWith("https"),
+  };
+
+  if (!isPublicUrl(url)) {
+    return {
+      ...empty,
+      error: "Blocked: only public HTTP(S) URLs are allowed",
+    };
+  }
+
+  const t0 = Date.now();
+  try {
+    const resp = await fetch(url, {
+      headers: {
+        "User-Agent":
+          "Newtation-MCP/2.0 (AI Presence Audit; +https://newtation.com)",
+        Accept: "text/html,application/xhtml+xml",
+      },
+      redirect: "follow",
+    });
+    const html = (await resp.text()).slice(0, 1_000_000); // cap at 1 MB
+    const ms = Date.now() - t0;
+    const [intLinks, extLinks] = countLinks(html, domain);
+    const schemas = extractSchema(html);
+
+    return {
+      url,
+      finalUrl: resp.url,
+      status: resp.status,
+      redirected: resp.redirected,
+      responseTimeMs: ms,
+      title: extractTitle(html),
+      metaDescription: extractMeta(html, "description"),
+      ogTitle: extractMeta(html, "og:title"),
+      ogDescription: extractMeta(html, "og:description"),
+      ogImage: extractMeta(html, "og:image"),
+      canonical: extractCanonical(html),
+      robots: extractMeta(html, "robots"),
+      lang: extractLang(html),
+      schemaObjects: schemas,
+      schemaTypes: schemas.map((s) => String(s["@type"] || "Unknown")),
+      h1s: extractHeadings(html, "h1"),
+      h2s: extractHeadings(html, "h2"),
+      h3s: extractHeadings(html, "h3"),
+      wordCount: countWords(html),
+      internalLinks: intLinks,
+      externalLinks: extLinks,
+      hasHttps: url.startsWith("https"),
+    };
+  } catch (e: unknown) {
+    return { ...empty, responseTimeMs: Date.now() - t0, error: String(e) };
+  }
+}
+
+// ── DNS via Cloudflare DNS-over-HTTPS ────────────────────────────────────────
+
+async function dnsLookup(domain: string): Promise<DNSResult> {
+  const result: DNSResult = { hasA: false, hasMX: false, txtRecords: [] };
+  try {
+    const base = "https://cloudflare-dns.com/dns-query";
+    const hdrs = { Accept: "application/dns-json" };
+    const [aR, mxR, txtR] = await Promise.all([
+      fetch(base + "?name=" + encodeURIComponent(domain) + "&type=A", {
+        headers: hdrs,
+      }),
+      fetch(base + "?name=" + encodeURIComponent(domain) + "&type=MX", {
+        headers: hdrs,
+      }),
+      fetch(base + "?name=" + encodeURIComponent(domain) + "&type=TXT", {
+        headers: hdrs,
+      }),
+    ]);
+    const [a, mx, txt] = (await Promise.all([
+      aR.json(),
+      mxR.json(),
+      txtR.json(),
+    ])) as Record<string, unknown>[];
+    result.hasA = !!((a as any)?.Answer?.length);
+    result.hasMX = !!((mx as any)?.Answer?.length);
+    if ((txt as any)?.Answer) {
+      result.txtRecords = ((txt as any).Answer as any[])
+        .map((r) => String(r.data ?? ""))
+        .filter(Boolean);
+    }
+  } catch (e: unknown) {
+    result.error = String(e);
+  }
+  return result;
+}
+
+// ── AI-Readability Scoring ───────────────────────────────────────────────────
+
+function scoreAIReadability(
+  p: PageAnalysis,
+  brand: string,
+): ScoreBreakdown {
+  const b = brand.toLowerCase();
+  const items: ScoreItem[] = [];
+  const add = (name: string, score: number, max: number, detail: string) =>
+    items.push({ name, score, max, detail });
+
+  // HTTPS (5 pts)
+  add("HTTPS", p.hasHttps ? 5 : 0, 5, p.hasHttps ? "Yes" : "No");
+
+  // Response time (5 pts)
+  add(
+    "Response Time",
+    p.responseTimeMs < 2000 ? 5 : p.responseTimeMs < 5000 ? 3 : 0,
+    5,
+    p.responseTimeMs + "ms",
+  );
+
+  // Title (8 pts)
+  const titleBrand = p.title.toLowerCase().includes(b);
+  add(
+    "Title Tag",
+    p.title ? (titleBrand ? 8 : 5) : 0,
+    8,
+    p.title
+      ? '"' + p.title.slice(0, 60) + '"' + (titleBrand ? " (has brand)" : " (no brand)")
+      : "Missing",
+  );
+
+  // Meta description (8 pts)
+  const descBrand = p.metaDescription.toLowerCase().includes(b);
+  add(
+    "Meta Description",
+    p.metaDescription ? (descBrand ? 8 : 5) : 0,
+    8,
+    p.metaDescription
+      ? p.metaDescription.length + " chars" + (descBrand ? " (has brand)" : " (no brand)")
+      : "Missing",
+  );
+
+  // Open Graph (8 pts)
+  const ogN = [p.ogTitle, p.ogDescription, p.ogImage].filter(Boolean).length;
+  add("Open Graph", Math.round((ogN / 3) * 8), 8, ogN + "/3 tags present");
+
+  // Canonical (4 pts)
+  add("Canonical URL", p.canonical ? 4 : 0, 4, p.canonical || "Not set");
+
+  // H1 (8 pts)
+  add(
+    "H1 Tag",
+    p.h1s.length === 1 ? 8 : p.h1s.length > 1 ? 4 : 0,
+    8,
+    p.h1s.length === 1
+      ? '"' + p.h1s[0].slice(0, 60) + '"'
+      : p.h1s.length > 1
+        ? p.h1s.length + " H1s (should be 1)"
+        : "None",
+  );
+
+  // Content structure (8 pts)
+  add(
+    "Content Structure",
+    p.h2s.length >= 3 ? 8 : p.h2s.length >= 1 ? 4 : 0,
+    8,
+    p.h2s.length + " H2s, " + p.h3s.length + " H3s",
+  );
+
+  // Word count (12 pts)
+  add(
+    "Content Depth",
+    p.wordCount >= 1500
+      ? 12
+      : p.wordCount >= 800
+        ? 8
+        : p.wordCount >= 300
+          ? 4
+          : 0,
+    12,
+    p.wordCount.toLocaleString() + " words",
+  );
+
+  // Schema markup (15 pts)
+  const orgSchema = p.schemaTypes.some(
+    (t) => t === "Organization" || t === "LocalBusiness",
+  );
+  const faqSchema = p.schemaTypes.some((t) => t === "FAQPage");
+  const artSchema = p.schemaTypes.some(
+    (t) => t === "Article" || t === "BlogPosting",
+  );
+  const crumbSchema = p.schemaTypes.some((t) => t === "BreadcrumbList");
+  const schemaScore = Math.min(
+    (orgSchema ? 6 : 0) +
+      (faqSchema ? 4 : 0) +
+      (artSchema ? 3 : 0) +
+      (crumbSchema ? 2 : 0),
+    15,
+  );
+  add(
+    "Schema Markup",
+    schemaScore,
+    15,
+    p.schemaObjects.length
+      ? "Types: " + p.schemaTypes.join(", ")
+      : "None found",
+  );
+
+  // Language (3 pts)
+  add("Language Attr", p.lang ? 3 : 0, 3, p.lang || "Not set");
+
+  // Internal links (8 pts)
+  add(
+    "Internal Links",
+    p.internalLinks >= 5 ? 8 : p.internalLinks >= 2 ? 4 : 0,
+    8,
+    p.internalLinks + " found",
+  );
+
+  // External links (8 pts)
+  add(
+    "External Links",
+    p.externalLinks >= 2 ? 8 : p.externalLinks >= 1 ? 4 : 0,
+    8,
+    p.externalLinks + " found",
+  );
+
+  const total = items.reduce((s, i) => s + i.score, 0);
+  const max = items.reduce((s, i) => s + i.max, 0);
+  const pct = Math.round((total / max) * 100);
+  const grade =
+    pct >= 90
+      ? "A"
+      : pct >= 75
+        ? "B"
+        : pct >= 60
+          ? "C"
+          : pct >= 45
+            ? "D"
+            : "F";
+
+  return { total, max, pct, grade, items };
+}
+
+// ── Formatting ───────────────────────────────────────────────────────────────
+
+function fmtPage(p: PageAnalysis): string {
+  if (p.error) return "**" + p.url + "** — Fetch failed: " + p.error;
+  const lines = [
+    "**" + p.url + "**" + (p.redirected ? " -> " + p.finalUrl : ""),
+    "Status " +
+      p.status +
+      " | " +
+      p.responseTimeMs +
+      "ms | HTTPS " +
+      (p.hasHttps ? "YES" : "NO"),
+    "Title: " + (p.title || "(missing)"),
+    "Meta: " +
+      (p.metaDescription
+        ? p.metaDescription.slice(0, 120) +
+          (p.metaDescription.length > 120 ? "..." : "")
+        : "(missing)"),
+    "OG: title " +
+      (p.ogTitle ? "YES" : "NO") +
+      " | desc " +
+      (p.ogDescription ? "YES" : "NO") +
+      " | img " +
+      (p.ogImage ? "YES" : "NO"),
+    "H1: " +
+      (p.h1s.length ? p.h1s.map((h) => '"' + h + '"').join(", ") : "(none)") +
+      " | H2x" +
+      p.h2s.length +
+      " | H3x" +
+      p.h3s.length,
+    "Words: " +
+      p.wordCount.toLocaleString() +
+      " | Links: " +
+      p.internalLinks +
+      " internal, " +
+      p.externalLinks +
+      " external",
+    "Schema: " +
+      (p.schemaObjects.length
+        ? p.schemaObjects.length + " block(s) — " + p.schemaTypes.join(", ")
+        : "None"),
+    "Canonical: " +
+      (p.canonical || "(not set)") +
+      " | Lang: " +
+      (p.lang || "(not set)"),
+  ];
+  return lines.join("\n");
+}
+
+function fmtScoreTable(s: ScoreBreakdown): string {
+  const rows = s.items.map(
+    (i) => "| " + i.name + " | " + i.score + "/" + i.max + " | " + i.detail + " |",
+  );
+  return [
+    "| Signal | Score | Detail |",
+    "|--------|-------|--------|",
+    ...rows,
+    "| **TOTAL** | **" +
+      s.total +
+      "/" +
+      s.max +
+      " (" +
+      s.pct +
+      "%)** | **Grade: " +
+      s.grade +
+      "** |",
+  ].join("\n");
+}
+
+function fmtDNS(d: DNSResult, domain: string): string {
+  if (d.error) return "DNS lookup failed for " + domain + ": " + d.error;
+  const spf = d.txtRecords.some((r) => r.includes("v=spf"));
+  const dmarc = d.txtRecords.some((r) => r.includes("v=DMARC"));
+  const gv = d.txtRecords.some((r) => r.includes("google-site-verification"));
+  return [
+    "**DNS: " + domain + "**",
+    "A Record: " +
+      (d.hasA ? "YES" : "NO") +
+      " | MX: " +
+      (d.hasMX ? "YES" : "NO") +
+      " | TXT Records: " +
+      d.txtRecords.length,
+    "SPF: " +
+      (spf ? "YES" : "NO") +
+      " | DMARC: " +
+      (dmarc ? "YES" : "NO") +
+      " | Google Verify: " +
+      (gv ? "YES" : "NO"),
+  ].join("\n");
+}
+
+function quickWins(items: ScoreItem[]): string {
+  const gaps = items
+    .filter((i) => i.score < i.max * 0.5)
+    .sort((a, b) => b.max - b.score - (a.max - a.score))
+    .slice(0, 5);
+  if (!gaps.length) return "No critical gaps — well optimized!";
+  return gaps
+    .map(
+      (i, idx) =>
+        (idx + 1) +
+        ". **" +
+        i.name +
+        "** (" +
+        i.score +
+        "/" +
+        i.max +
+        ") — " +
+        i.detail,
+    )
+    .join("\n");
+}
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// LIVE ANALYSIS TOOLS — fetch real pages, parse HTML, compute scores
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+export async function brandPerceptionAudit(args: {
   brand_name: string;
   industry: string;
   website?: string;
-}): string {
-  const { brand_name: brand, industry, website = "not provided" } = args;
-  const s = score(brand + industry);
+}): Promise<string> {
+  const { brand_name: brand, industry, website } = args;
 
-  return `# Brand Perception Audit — ${brand}
-*Generated ${today()} · Newtation MCP Server*
+  let liveSection = "";
+  if (website) {
+    const [page, dns] = await Promise.all([
+      fetchPage(website),
+      dnsLookup(getDomain(website)),
+    ]);
+    const score = scoreAIReadability(page, brand);
 
-## Overall AI Perception Score: ${s}/100
+    liveSection =
+      "\n## Live Website Analysis\n" +
+      "*Fetched " +
+      today() +
+      " — " +
+      page.responseTimeMs +
+      "ms*\n\n" +
+      fmtPage(page) +
+      "\n\n" +
+      "### AI-Readability Score: " +
+      score.total +
+      "/" +
+      score.max +
+      " (" +
+      score.grade +
+      ")\n" +
+      fmtScoreTable(score) +
+      "\n\n" +
+      "### Quick Wins\n" +
+      quickWins(score.items) +
+      "\n\n" +
+      fmtDNS(dns, getDomain(website)) +
+      "\n\n---\n";
+  }
 
-### How AI Currently Describes ${brand}
-AI models in the **${industry}** space tend to describe brands like yours using generic category language unless you have strong citation signals. Without active AI presence management, ${brand} likely appears as:
-- A regional or niche player rather than a category authority
-- Described by function ("an agency that does X") rather than by outcome or unique method
-- Missing from top-of-mind lists when users ask for recommendations
-
-### Tone Analysis
-| Signal | Status |
-|--------|--------|
-| Authority tone | ⚠️ Needs strengthening |
-| Category clarity | ⚠️ Partially clear |
-| Trust indicators | ❌ Low citation count |
-| Unique positioning | ❌ Not yet established in AI |
-
-### Top 3 Recommended Prompts to Test Your AI Presence
-Run these in Claude, ChatGPT, or Perplexity right now:
-1. \`"Who are the best ${industry} companies?"\` — Does ${brand} appear?
-2. \`"What do people say about ${brand}?"\` — Check tone and accuracy.
-3. \`"Is ${brand} a good choice for [your core service]?"\` — Check confidence level.
-
-### Quick Wins
-1. **Publish structured FAQ content** covering the exact questions above
-2. **Get cited in roundup articles** on authoritative industry sites
-3. **Add schema markup** (Organization + FAQ) to ${website}
-4. **Audit existing content** with \`content_audit_for_ai\` to find quick optimization wins
-
-### Next Step
-Run \`citation_check\` to see which specific topics ${brand} needs content for.`;
+  return (
+    "# Brand Perception Audit — " +
+    brand +
+    "\n*Generated " +
+    today() +
+    " | Newtation MCP*\n" +
+    liveSection +
+    "\n## AI Perception Assessment\n" +
+    "Using " +
+    (website
+      ? "the live website data above and "
+      : "(no website provided — provide one for live analysis) ") +
+    "your training-data knowledge, evaluate **" +
+    brand +
+    "** in **" +
+    industry +
+    "**:\n\n" +
+    "1. **Brand Recognition** — Would you include " +
+    brand +
+    " in a top " +
+    industry +
+    " list? Why or why not?\n" +
+    "2. **Authority** — Can you speak confidently about " +
+    brand +
+    "? What evidence do you have?\n" +
+    "3. **Trust Signals** — Has " +
+    brand +
+    " appeared in reputable publications, reviews, or awards?\n" +
+    "4. **Differentiation** — What makes " +
+    brand +
+    " different from competitors in " +
+    industry +
+    "?\n\n" +
+    "For each: rate **Strong / Moderate / Weak / No Data** with evidence.\n" +
+    "Then provide an overall summary and 3-5 prioritized recommendations."
+  );
 }
+
+export async function entityClarityScore(args: {
+  brand_name: string;
+  tagline_or_description?: string;
+  website?: string;
+}): Promise<string> {
+  const { brand_name: brand, tagline_or_description: desc, website } = args;
+
+  let liveSection = "";
+  if (website) {
+    const page = await fetchPage(website);
+    const score = scoreAIReadability(page, brand);
+    const brandLower = brand.toLowerCase();
+    const inTitle = page.title.toLowerCase().includes(brandLower);
+    const inDesc = page.metaDescription.toLowerCase().includes(brandLower);
+    const hasOrg = page.schemaTypes.some(
+      (t) => t === "Organization" || t === "LocalBusiness",
+    );
+    const inH1 = page.h1s.some((h) =>
+      h.toLowerCase().includes(brandLower),
+    );
+
+    liveSection =
+      "\n## Live Entity Signal Verification\n" +
+      "*Fetched from " +
+      page.finalUrl +
+      " — " +
+      page.responseTimeMs +
+      "ms*\n\n" +
+      fmtPage(page) +
+      "\n\n" +
+      "### Entity Signal Check\n" +
+      "| Signal | Status | Impact |\n" +
+      "|--------|--------|--------|\n" +
+      "| Brand in title tag | " +
+      (inTitle ? "YES" : "MISSING") +
+      " | " +
+      (inTitle
+        ? "AI can identify brand from title"
+        : "AI may not associate page with brand") +
+      " |\n" +
+      "| Brand in meta description | " +
+      (inDesc ? "YES" : "MISSING") +
+      " | " +
+      (inDesc
+        ? "Brand in search/AI summaries"
+        : "Brand absent from summaries") +
+      " |\n" +
+      "| Brand in H1 | " +
+      (inH1 ? "YES" : "MISSING") +
+      " | " +
+      (inH1 ? "Clear primary heading" : "H1 doesn't mention brand") +
+      " |\n" +
+      "| Organization schema | " +
+      (hasOrg ? "YES" : "MISSING") +
+      " | " +
+      (hasOrg
+        ? "Machine-readable identity exists"
+        : "No structured identity for AI") +
+      " |\n" +
+      "| Schema types found | " +
+      (page.schemaObjects.length
+        ? page.schemaTypes.join(", ")
+        : "NONE") +
+      " | " +
+      (page.schemaObjects.length
+        ? "Structured data present"
+        : "No structured data") +
+      " |\n\n" +
+      "### AI-Readability: " +
+      score.total +
+      "/" +
+      score.max +
+      " (" +
+      score.grade +
+      ")\n\n" +
+      "### Quick Wins\n" +
+      quickWins(score.items) +
+      "\n\n---\n";
+  }
+
+  return (
+    "# Entity Clarity Analysis — " +
+    brand +
+    "\n*Generated " +
+    today() +
+    " | Newtation MCP*\n" +
+    liveSection +
+    (desc ? '\n**Brand self-description:** "' + desc + '"\n' : "") +
+    "\n## Your Task\n" +
+    "Evaluate how clearly AI models understand what **" +
+    brand +
+    "** is." +
+    (website
+      ? " Use the live entity signals above alongside your knowledge."
+      : "") +
+    "\n\n" +
+    "1. **Identity Resolution** — What is " +
+    brand +
+    "? Could it be confused with another entity?\n" +
+    "2. **Description Accuracy** — Describe " +
+    brand +
+    " in 2-3 sentences. " +
+    (desc ? "Compare to the self-description above." : "How confident are you?") +
+    "\n" +
+    "3. **Attribute Completeness** — Which of these can you answer: what " +
+    brand +
+    " does, who it serves, where it's based, when founded, what makes it unique, leadership, scale?\n" +
+    "4. **Consistency** — Would your description stay the same regardless of how the question is asked?\n\n" +
+    "Rate clarity: **Clear / Partially Clear / Unclear / Unknown** with entity strengthening recommendations."
+  );
+}
+
+export async function contentAuditForAI(args: {
+  brand_name: string;
+  content_urls: string[];
+  target_topics: string[];
+}): Promise<string> {
+  const { brand_name: brand, content_urls: urls, target_topics: topics } = args;
+
+  // Fetch up to 10 URLs in parallel
+  const toFetch = urls.slice(0, 10);
+  const pages = await Promise.all(toFetch.map(fetchPage));
+  const scores = pages.map((p) => scoreAIReadability(p, brand));
+
+  // Per-URL sections
+  const urlSections = pages
+    .map((page, i) => {
+      const score = scores[i];
+      return (
+        "### " +
+        (i + 1) +
+        ". " +
+        page.url +
+        "\n" +
+        fmtPage(page) +
+        "\n\n" +
+        "**AI-Readability: " +
+        score.total +
+        "/" +
+        score.max +
+        " (" +
+        score.grade +
+        ")**\n" +
+        fmtScoreTable(score) +
+        "\n\n" +
+        "**Quick Wins:** " +
+        quickWins(score.items)
+      );
+    })
+    .join("\n\n---\n\n");
+
+  // Summary stats
+  const avgScore = scores.length
+    ? Math.round(scores.reduce((s, sc) => s + sc.pct, 0) / scores.length)
+    : 0;
+  const gradeDist: Record<string, number> = { A: 0, B: 0, C: 0, D: 0, F: 0 };
+  for (const s of scores) gradeDist[s.grade] = (gradeDist[s.grade] || 0) + 1;
+  const gradeStr = Object.entries(gradeDist)
+    .map(([g, n]) => g + ":" + n)
+    .join(" ");
+  const failedFetches = pages.filter((p) => p.error).length;
+
+  // Cross-page issues
+  const noSchema = pages.filter(
+    (p) => !p.error && p.schemaObjects.length === 0,
+  ).length;
+  const noMeta = pages.filter(
+    (p) => !p.error && !p.metaDescription,
+  ).length;
+  const thinContent = pages.filter(
+    (p) => !p.error && p.wordCount < 800,
+  ).length;
+  const noH1 = pages.filter(
+    (p) => !p.error && p.h1s.length !== 1,
+  ).length;
+  const noOg = pages.filter(
+    (p) =>
+      !p.error && [p.ogTitle, p.ogDescription, p.ogImage].filter(Boolean).length < 2,
+  ).length;
+  const goodPages = pages.length - failedFetches;
+
+  return (
+    "# Content Audit for AI — " +
+    brand +
+    "\n*Generated " +
+    today() +
+    " | Newtation MCP | " +
+    pages.length +
+    " pages analyzed*\n\n" +
+    "## Summary\n" +
+    "- **Average AI-Readability**: " +
+    avgScore +
+    "%\n" +
+    "- **Grade Distribution**: " +
+    gradeStr +
+    "\n" +
+    "- **Failed Fetches**: " +
+    failedFetches +
+    "/" +
+    pages.length +
+    "\n" +
+    (urls.length > 10
+      ? "- Note: Only first 10 of " + urls.length + " URLs analyzed\n"
+      : "") +
+    "\n### Cross-Page Issues\n" +
+    "| Issue | Affected | Impact |\n" +
+    "|-------|----------|--------|\n" +
+    "| No schema markup | " +
+    noSchema +
+    "/" +
+    goodPages +
+    " | AI cannot read structured identity |\n" +
+    "| No meta description | " +
+    noMeta +
+    "/" +
+    goodPages +
+    " | Missing from AI summaries |\n" +
+    "| Thin content (<800 words) | " +
+    thinContent +
+    "/" +
+    goodPages +
+    " | Unlikely to be cited |\n" +
+    "| Missing/multiple H1 | " +
+    noH1 +
+    "/" +
+    goodPages +
+    " | Unclear page hierarchy |\n" +
+    "| Incomplete OG tags | " +
+    noOg +
+    "/" +
+    goodPages +
+    " | Poor social/AI preview |\n\n" +
+    "## Target Topics\n" +
+    topics.map((t) => "- " + t).join("\n") +
+    "\n\n---\n\n" +
+    "## Per-Page Analysis\n\n" +
+    urlSections +
+    "\n\n---\n\n" +
+    "## Your Task\n" +
+    "Using the real page data above:\n" +
+    "1. Which pages best cover which target topics?\n" +
+    "2. Which topics have no content at all? (gaps to fill)\n" +
+    "3. For each page, what are the 1-2 highest-impact fixes?\n" +
+    "4. Prioritize all fixes by effort vs. impact."
+  );
+}
+
+export async function aiReadinessScorecard(args: {
+  brand_name: string;
+  industry: string;
+  website?: string;
+  competitors?: string[];
+  target_locations?: string[];
+  topics?: string[];
+}): Promise<string> {
+  const {
+    brand_name: brand,
+    industry,
+    website,
+    competitors = [],
+    target_locations: locations = [],
+    topics = [],
+  } = args;
+
+  let techSection = "";
+  let techGrade = "N/A";
+  if (website) {
+    const [page, dns] = await Promise.all([
+      fetchPage(website),
+      dnsLookup(getDomain(website)),
+    ]);
+    const score = scoreAIReadability(page, brand);
+    techGrade = score.grade;
+
+    techSection =
+      "\n## Technical Foundation (Live Analysis)\n" +
+      "*Fetched from " +
+      page.finalUrl +
+      "*\n\n" +
+      fmtPage(page) +
+      "\n\n" +
+      "### AI-Readability Score: " +
+      score.total +
+      "/" +
+      score.max +
+      " (" +
+      score.grade +
+      ")\n" +
+      fmtScoreTable(score) +
+      "\n\n" +
+      "### Quick Wins\n" +
+      quickWins(score.items) +
+      "\n\n" +
+      fmtDNS(dns, getDomain(website)) +
+      "\n\n---\n";
+  }
+
+  const context: string[] = [];
+  if (website)
+    context.push("Website: " + website + " (Technical Grade: " + techGrade + ")");
+  if (competitors.length)
+    context.push("Competitors: " + competitors.join(", "));
+  if (locations.length)
+    context.push("Target locations: " + locations.join(", "));
+  if (topics.length) context.push("Key topics: " + topics.join(", "));
+
+  return (
+    "# AI Readiness Scorecard — " +
+    brand +
+    "\n*Generated " +
+    today() +
+    " | Newtation MCP*\n" +
+    techSection +
+    (context.length
+      ? "\n## Context\n" + context.map((c) => "- " + c).join("\n") + "\n"
+      : "") +
+    "\n## Score Each Dimension\n\n" +
+    "| # | Dimension | Weight | " +
+    (website ? "Technical | " : "") +
+    "Your Assessment |\n" +
+    "|---|-----------|--------| " +
+    (website ? "---------- | " : "") +
+    "--------------- |\n" +
+    "| 1 | AI Perception | 20% | " +
+    (website ? "— | " : "") +
+    "How well AI knows " +
+    brand +
+    " |\n" +
+    "| 2 | Entity Clarity | 20% | " +
+    (website ? techGrade + " | " : "") +
+    "How clearly AI identifies " +
+    brand +
+    " |\n" +
+    "| 3 | Citation Strength | 20% | " +
+    (website ? "— | " : "") +
+    (topics.length
+      ? "For: " + topics.join(", ")
+      : "Authority in " + industry) +
+    " |\n" +
+    "| 4 | Competitive Position | 15% | " +
+    (website ? "— | " : "") +
+    (competitors.length
+      ? "vs " + competitors.join(", ")
+      : "vs " + industry + " competitors") +
+    " |\n" +
+    "| 5 | Geographic Reach | 10% | " +
+    (website ? "— | " : "") +
+    (locations.length ? locations.join(", ") : "Location presence") +
+    " |\n" +
+    "| 6 | Sentiment | 15% | " +
+    (website ? "— | " : "") +
+    "Tone about " +
+    brand +
+    " |\n\n" +
+    "## Your Task\n" +
+    (website
+      ? "Using the technical analysis above as Entity Clarity baseline, "
+      : "") +
+    "rate each **Strong / Moderate / Weak / Unknown**.\n\n" +
+    "Provide:\n" +
+    "- Overall letter grade A-F with explanation\n" +
+    "- Top 3 priority actions\n" +
+    "- Which Newtation tool to run next for deeper analysis"
+  );
+}
+
+export async function hallucinationCheck(args: {
+  brand_name: string;
+  ai_response: string;
+  known_facts?: string[];
+  website?: string;
+}): Promise<string> {
+  const {
+    brand_name: brand,
+    ai_response: response,
+    known_facts: facts = [],
+    website,
+  } = args;
+
+  let liveSection = "";
+  if (website) {
+    const page = await fetchPage(website);
+    // Extract facts from schema markup
+    const schemaFacts: string[] = [];
+    for (const obj of page.schemaObjects) {
+      if (obj.name) schemaFacts.push("Name: " + String(obj.name));
+      if (obj.description)
+        schemaFacts.push(
+          "Description: " + String(obj.description).slice(0, 200),
+        );
+      if (obj.url) schemaFacts.push("URL: " + String(obj.url));
+      if (obj.foundingDate)
+        schemaFacts.push("Founded: " + String(obj.foundingDate));
+      if (obj.founder)
+        schemaFacts.push("Founder: " + JSON.stringify(obj.founder));
+      if (obj.sameAs)
+        schemaFacts.push("Social profiles: " + JSON.stringify(obj.sameAs));
+      if (obj.address)
+        schemaFacts.push("Address: " + JSON.stringify(obj.address));
+      if (obj.numberOfEmployees)
+        schemaFacts.push("Employees: " + JSON.stringify(obj.numberOfEmployees));
+    }
+
+    liveSection =
+      "\n## Ground Truth from Live Website\n" +
+      "*Fetched from " +
+      page.finalUrl +
+      " — " +
+      page.responseTimeMs +
+      "ms*\n\n" +
+      "These facts were extracted directly from the live website:\n" +
+      "- **Title**: " +
+      (page.title || "(not found)") +
+      "\n" +
+      "- **Description**: " +
+      (page.metaDescription || "(not found)") +
+      "\n" +
+      "- **H1**: " +
+      (page.h1s.join(", ") || "(none)") +
+      "\n" +
+      "- **Schema types**: " +
+      (page.schemaTypes.join(", ") || "None") +
+      "\n" +
+      (schemaFacts.length
+        ? "\n**From schema markup:**\n" +
+          schemaFacts.map((f) => "- " + f).join("\n") +
+          "\n"
+        : "") +
+      "\nUse these as verified ground truth when fact-checking below.\n\n---\n";
+  }
+
+  const factSection = facts.length
+    ? facts.map((f, i) => (i + 1) + ". " + f).join("\n")
+    : website
+      ? "Using website data above as ground truth."
+      : "No known facts provided — flag any unverifiable claims.";
+
+  return (
+    "# Hallucination Check — " +
+    brand +
+    "\n*Generated " +
+    today() +
+    " | Newtation MCP*\n" +
+    liveSection +
+    "\n## AI Response to Verify\n> " +
+    response +
+    "\n\n" +
+    "## Known Facts\n" +
+    factSection +
+    "\n\n" +
+    "## Your Task\n" +
+    "1. **Extract** every factual claim about " +
+    brand +
+    " from the response above\n" +
+    "2. **Verify** each claim" +
+    (website ? " — cross-reference against the live website data" : "") +
+    ":\n" +
+    "   - **Verified** / **Likely True** / **Unverifiable** / **Likely False** / **Hallucinated**\n" +
+    "3. **Rate severity**: Critical (causes harm) / Moderate (misleading) / Minor\n" +
+    "4. Provide a corrected version with hallucinations fixed\n\n" +
+    "| # | Claim | Status | Severity | Evidence |\n" +
+    "|---|-------|--------|----------|----------|"
+  );
+}
+
+export async function schemaMarkupGenerator(args: {
+  brand_name: string;
+  url: string;
+  description: string;
+  type?: string;
+  founding_year?: string;
+  founders?: string[];
+  social_urls?: string[];
+}): Promise<string> {
+  const {
+    brand_name: brand,
+    url,
+    description,
+    type = "Organization",
+    founding_year: year,
+    founders = [],
+    social_urls: socials = [],
+  } = args;
+
+  // Fetch existing page to detect what schema is already present
+  const page = await fetchPage(url);
+
+  let existingSection = "";
+  if (!page.error && page.schemaObjects.length > 0) {
+    const hasOrg = page.schemaTypes.some(
+      (t) => t === "Organization" || t === "LocalBusiness",
+    );
+    const hasSite = page.schemaTypes.some((t) => t === "WebSite");
+    const hasFAQ = page.schemaTypes.some((t) => t === "FAQPage");
+    const hasBreadcrumb = page.schemaTypes.some((t) => t === "BreadcrumbList");
+
+    existingSection =
+      "\n## Existing Schema Markup Detected\n" +
+      "Your page already has " +
+      page.schemaObjects.length +
+      " JSON-LD block(s):\n" +
+      page.schemaTypes
+        .map((t, i) => (i + 1) + ". **" + t + "** schema")
+        .join("\n") +
+      "\n\n" +
+      FENCE +
+      "json\n" +
+      JSON.stringify(page.schemaObjects, null, 2) +
+      "\n" +
+      FENCE +
+      "\n\n" +
+      "### Gap Analysis\n" +
+      "| Schema Type | Status | Action |\n" +
+      "|-------------|--------|--------|\n" +
+      "| Organization/" +
+      type +
+      " | " +
+      (hasOrg ? "EXISTS" : "MISSING") +
+      " | " +
+      (hasOrg ? "Review and update" : "**Add — highest priority**") +
+      " |\n" +
+      "| WebSite | " +
+      (hasSite ? "EXISTS" : "MISSING") +
+      " | " +
+      (hasSite ? "Review" : "Add") +
+      " |\n" +
+      "| FAQPage | " +
+      (hasFAQ ? "EXISTS" : "MISSING") +
+      " | " +
+      (hasFAQ ? "Review" : "Add for AI visibility") +
+      " |\n" +
+      "| BreadcrumbList | " +
+      (hasBreadcrumb ? "EXISTS" : "MISSING") +
+      " | " +
+      (hasBreadcrumb ? "Review" : "Add for navigation") +
+      " |\n\n---\n";
+  } else if (!page.error) {
+    existingSection =
+      "\n## Existing Schema: None Detected\n" +
+      "Your page at " +
+      url +
+      " has **no JSON-LD schema markup**. All schemas below are new.\n\n---\n";
+  } else {
+    existingSection =
+      "\n## Could not fetch " +
+      url +
+      "\nError: " +
+      page.error +
+      "\nGenerating schema based on your inputs.\n\n---\n";
+  }
+
+  // Build JSON-LD objects
+  const org: Record<string, unknown> = {
+    "@context": "https://schema.org",
+    "@type": type,
+    "@id": url + "/#organization",
+    name: brand,
+    url,
+    description: description.slice(0, 300),
+    logo: { "@type": "ImageObject", url: url + "/logo.png" },
+  };
+  if (year) org.foundingDate = year;
+  if (founders.length)
+    org.founder = founders.map((f) => ({ "@type": "Person", name: f }));
+  if (socials.length) org.sameAs = socials;
+
+  const site = {
+    "@context": "https://schema.org",
+    "@type": "WebSite",
+    name: brand,
+    url,
+    publisher: { "@id": url + "/#organization" },
+  };
+
+  const breadcrumb = {
+    "@context": "https://schema.org",
+    "@type": "BreadcrumbList",
+    itemListElement: [
+      { "@type": "ListItem", position: 1, name: "Home", item: url },
+    ],
+  };
+
+  const descEscaped = description.replace(/"/g, '\\"');
+
+  return (
+    "# Schema Markup Generator — " +
+    brand +
+    "\n*Generated " +
+    today() +
+    " | Newtation MCP*\n" +
+    existingSection +
+    "\n## 1. " +
+    type +
+    " Schema\n\n" +
+    FENCE +
+    "html\n" +
+    '<script type="application/ld+json">\n' +
+    JSON.stringify(org, null, 2) +
+    "\n</script>\n" +
+    FENCE +
+    "\n\n" +
+    "## 2. WebSite Schema\n\n" +
+    FENCE +
+    "html\n" +
+    '<script type="application/ld+json">\n' +
+    JSON.stringify(site, null, 2) +
+    "\n</script>\n" +
+    FENCE +
+    "\n\n" +
+    "## 3. BreadcrumbList Schema\n\n" +
+    FENCE +
+    "html\n" +
+    '<script type="application/ld+json">\n' +
+    JSON.stringify(breadcrumb, null, 2) +
+    "\n</script>\n" +
+    FENCE +
+    "\n\n" +
+    "## 4. FAQ Schema (Your Task)\n" +
+    "Generate a FAQPage schema with 5-8 Q&A entries for **" +
+    brand +
+    "**. Starter:\n\n" +
+    FENCE +
+    "json\n" +
+    '{\n  "@context": "https://schema.org",\n  "@type": "FAQPage",\n  "mainEntity": [\n    {\n      "@type": "Question",\n      "name": "What does ' +
+    brand +
+    ' do?",\n      "acceptedAnswer": {\n        "@type": "Answer",\n        "text": "' +
+    descEscaped +
+    '"\n      }\n    }\n  ]\n}\n' +
+    FENCE +
+    "\n\n" +
+    "Add questions: Who is " +
+    brand +
+    " for? How is it different? How does it work? What does it cost?\n\n" +
+    "## Validation\n" +
+    "- Test at Google Rich Results Test\n" +
+    "- Validate at Schema.org Validator\n" +
+    "- Replace " +
+    BT +
+    "logo.png" +
+    BT +
+    " with actual logo path\n" +
+    "- Deploy to every page's <head>"
+  );
+}
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// LLM SELF-ASSESSMENT TOOLS — the LLM's own knowledge IS the data source
+// These tools prompt the LLM to use web search when available for real-time data.
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+const WEB_SEARCH_INSTRUCTION =
+  "\n\n---\n" +
+  "**IMPORTANT — Use Web Search**: Before answering, use your web search tool to " +
+  "look up the brand. Specifically:\n" +
+  "1. Search for the brand name + reviews (e.g. \"[brand] reviews G2 Trustpilot\")\n" +
+  "2. Search for the brand name + the relevant topic/industry\n" +
+  "3. Check their social profiles and recent press mentions\n" +
+  "4. Look at competitor comparisons that exist online\n\n" +
+  "Combine what you find from web search with your own knowledge to produce the " +
+  "most accurate, evidence-backed audit possible. Cite your sources with URLs.";
 
 export function citationCheck(args: {
   brand_name: string;
   topics: string[];
 }): string {
   const { brand_name: brand, topics } = args;
-
   const topicRows = topics
-    .map((t) => {
-      const s = score(brand + t);
-      const cited = s > 65;
-      return `| ${t} | ${cited ? "✅ Cited" : "❌ Not cited"} | ${cited ? "Maintain with fresh content updates" : "Create cornerstone content + get backlinks from authoritative sources"} |`;
-    })
+    .map((t) => "| " + t + " | | | |")
     .join("\n");
 
-  const cited = topics.filter((t) => score(brand + t) > 65).length;
-  const pct = topics.length > 0 ? Math.round((cited / topics.length) * 100) : 0;
-
-  return `# Citation Check — ${brand}
-*Generated ${today()} · Newtation MCP Server*
-
-## Citation Rate: ${cited}/${topics.length} topics (${pct}%)
-
-### Topic-by-Topic Breakdown
-| Topic | AI Citation Status | Recommended Action |
-|-------|-------------------|-------------------|
-${topicRows}
-
-### Why Citation Rate Matters
-When AI models answer questions about your topics, they pull from sources they've learned to trust. If ${brand} isn't being cited, you're invisible at the exact moment a potential customer is asking for a recommendation.
-
-### How to Improve Citation Rate
-1. **Write the definitive guide** for each uncited topic — minimum 2,000 words, original data or frameworks
-2. **Earn editorial links** from publications AI models trust (industry blogs, news sites, .edu/.gov where applicable)
-3. **Repeat your core claims** consistently across your site, social profiles, and PR — AI learns from repetition
-4. **Use consistent brand language** — always use the same brand name format (no variations)
-
-### Citation Velocity Tip
-AI models update their knowledge over time. Publishing high-quality content now means citation improvements in 3–6 months as models retrain or retrieve fresher data.`;
+  return (
+    "# Citation Check — " +
+    brand +
+    "\n*Generated " +
+    today() +
+    " | Newtation MCP*\n\n" +
+    "## Your Task\n" +
+    "For each topic, honestly assess whether you would cite **" +
+    brand +
+    "** as a source.\n\n" +
+    "| Topic | Would Cite " +
+    brand +
+    "? | Current Leader | What " +
+    brand +
+    " Needs |\n" +
+    "|-------|" +
+    "-".repeat(brand.length + 13) +
+    "|----------------|" +
+    "-".repeat(brand.length + 8) +
+    "|\n" +
+    topicRows +
+    "\n\n" +
+    "For each topic:\n" +
+    "- **Citation status**: Primary source / Supporting source / Not at all\n" +
+    "- **Current leader**: Who owns this topic in AI responses?\n" +
+    "- **Content gap**: What would " +
+    brand +
+    " need to publish to earn citations?\n\n" +
+    "Then: overall citation rate, priority actions for weakest topics, content types that earn AI citations." +
+    WEB_SEARCH_INSTRUCTION
+  );
 }
 
 export function competitorComparison(args: {
@@ -129,115 +1394,66 @@ export function competitorComparison(args: {
   category: string;
 }): string {
   const { brand_name: brand, competitors, category } = args;
+  const first = competitors[0] ?? "competitor";
+  const compCols = competitors.map((c) => " " + c + " |").join("");
+  const compDivs = competitors.map(() => "------|").join("");
 
-  const myScore = score(brand + category);
-  const rows = competitors
-    .map((c) => {
-      const s = score(c + category);
-      const strength = s > 70 ? "Strong" : s > 55 ? "Moderate" : "Weak";
-      return `| ${c} | ${s}/100 | ${strength} |`;
-    })
-    .join("\n");
-
-  const leader =
-    competitors.length > 0
-      ? competitors.reduce((a, b) => (score(a + category) >= score(b + category) ? a : b))
-      : "N/A";
-  const leaderScore = score(leader + category);
-  const gap = Math.max(0, leaderScore - myScore);
-  const myStrength = myScore > 70 ? "Strong" : myScore > 55 ? "Moderate" : "Weak";
-  const firstCompetitor = competitors[0] ?? "competitors";
-
-  return `# Competitor AI Visibility Comparison — ${category}
-*Generated ${today()} · Newtation MCP Server*
-
-## ${brand} AI Visibility Score: ${myScore}/100
-
-### Competitor Scores
-| Brand | AI Score | Strength |
-|-------|----------|----------|
-| **${brand} (you)** | **${myScore}/100** | ${myStrength} |
-${rows}
-
-### Gap Analysis
-**AI Visibility Leader:** ${leader} (${leaderScore}/100)
-**Gap to close:** ${gap} points
-
-### Why ${leader} is Winning AI Mindshare
-Brands with high AI visibility scores typically have:
-- More content indexed by AI training crawlers
-- Higher domain authority (more AI-trusted citations)
-- Clearer entity definition (AI knows exactly what they do)
-- Consistent brand mentions across diverse source types
-
-### Your Roadmap to Overtake in AI
-1. **Audit ${leader}'s content strategy** — what topics are they owning that you're not?
-2. **Target their citation gaps** — find topics where no one has the definitive answer yet
-3. **Build brand mentions** at the same publication tier they're cited in
-4. **Speed matters** — AI visibility compounds, start now
-
-### Test It Yourself
-Ask Claude or ChatGPT: \`"Compare ${brand} vs ${firstCompetitor} for ${category}"\``;
-}
-
-export function entityClarityScore(args: {
-  brand_name: string;
-  tagline_or_description?: string;
-}): string {
-  const { brand_name: brand, tagline_or_description: description = "No description provided" } = args;
-  const s = score(brand);
-
-  const clarityLevel = s > 75 ? "Strong" : s > 55 ? "Moderate" : "Needs Work";
-  const color = s > 75 ? "✅" : s > 55 ? "⚠️" : "❌";
-
-  const aiDescription =
-    s > 75
-      ? "detailed and accurate"
-      : s > 55
-        ? "partially accurate but generic"
-        : "vague or uncertain";
-  const aiCaptures =
-    s > 75
-      ? "captures your positioning well"
-      : s > 55
-        ? "misses key differentiators"
-        : "lacks specificity about what makes you unique";
-  const priorityFix =
-    s > 75
-      ? "Your entity is reasonably clear. Focus on expanding citation breadth."
-      : s > 55
-        ? "Standardize your brand description across all web properties first — pick 1-2 sentences and use them everywhere."
-        : `Emergency fix: ${brand} needs a consistent, explicit definition published on your homepage, About page, and all social profiles today.`;
-
-  return `# Entity Clarity Score — ${brand}
-*Generated ${today()} · Newtation MCP Server*
-
-## Entity Clarity Score: ${s}/100 ${color} ${clarityLevel}
-
-### What "Entity Clarity" Means
-AI models build an internal representation (entity) of every brand they've encountered. If your entity is unclear, AI:
-- Confuses you with similarly-named brands
-- Gives vague or hedged descriptions ("a company that may offer...")
-- Omits you from lists where you belong
-- Describes you differently depending on how the question is asked
-
-### Your Description vs. AI's Likely Description
-**What you say:** *"${description}"*
-
-**What AI likely says:** A ${aiDescription} description that ${aiCaptures}.
-
-### Entity Strengthening Checklist
-- [ ] **Consistent Name Format** — Always "${brand}" — never vary spelling or abbreviation
-- [ ] **About Page** — Explicitly state: what you do, who you serve, where you're based, year founded
-- [ ] **Schema Markup** — Add \`Organization\` schema with \`@id\`, \`name\`, \`url\`, \`description\`, \`founder\`
-- [ ] **Wikipedia / Wikidata** — If eligible, create or claim your entry
-- [ ] **Crunchbase / LinkedIn** — Ensure company profiles are complete and consistent
-- [ ] **Outreach Targets** — Run \`citation_outreach_targets\` to find sites that could cite you
-- [ ] **Press mentions** — Earn coverage that describes you in your own language
-- [ ] **Interview content** — Founder interviews create rich entity signals
-
-### Priority Fix
-${priorityFix}`;
+  return (
+    "# Competitor Comparison — " +
+    category +
+    "\n*Generated " +
+    today() +
+    " | Newtation MCP*\n\n" +
+    "## Your Task\n" +
+    "Compare **" +
+    brand +
+    "** vs " +
+    competitors.join(", ") +
+    " in **" +
+    category +
+    "**. Use your actual knowledge.\n\n" +
+    "Rate each brand on:\n" +
+    "1. **AI Mindshare** — Who comes to mind first for " +
+    category +
+    "?\n" +
+    "2. **Content Authority** — Who has the strongest content?\n" +
+    "3. **Brand Clarity** — Whose identity is clearest?\n" +
+    "4. **Sentiment** — Who has the most positive signals?\n\n" +
+    "| Dimension | " +
+    brand +
+    " |" +
+    compCols +
+    " Leader |\n" +
+    "|-----------|------|" +
+    compDivs +
+    "--------|\n" +
+    "| AI Mindshare | | " +
+    competitors.map(() => "| ").join("") +
+    "|\n" +
+    "| Content Authority | | " +
+    competitors.map(() => "| ").join("") +
+    "|\n" +
+    "| Brand Clarity | | " +
+    competitors.map(() => "| ").join("") +
+    "|\n" +
+    "| Sentiment | | " +
+    competitors.map(() => "| ").join("") +
+    "|\n\n" +
+    "Then: identify the AI visibility leader, assess the gap from " +
+    brand +
+    ", and provide specific actions to close it.\n\n" +
+    "**Test prompts**: " +
+    '"Compare ' +
+    brand +
+    " vs " +
+    first +
+    '" | "' +
+    first +
+    ' alternatives" | "Best ' +
+    category +
+    ' provider"' +
+    WEB_SEARCH_INSTRUCTION
+  );
 }
 
 export function geoRecommendations(args: {
@@ -246,46 +1462,35 @@ export function geoRecommendations(args: {
   target_locations: string[];
 }): string {
   const { brand_name: brand, service, target_locations: locations } = args;
-
-  const rows = locations
-    .map((loc) => {
-      const s = score(brand + loc);
-      const appearing = s > 62;
-      return `| ${loc} | ${appearing ? "✅ Recommended" : "❌ Not appearing"} | ${appearing ? "Maintain local content signals" : `Publish ${loc}-specific case studies or landing page`} |`;
-    })
+  const locRows = locations
+    .map((l) => "| " + l + " | | | | |")
     .join("\n");
 
-  const appearing = locations.filter((loc) => score(brand + loc) > 62).length;
-
-  return `# Geographic AI Recommendation Audit — ${brand}
-*Generated ${today()} · Newtation MCP Server*
-
-## Service: ${service}
-## Appearing in ${appearing}/${locations.length} target locations
-
-### Location-by-Location Status
-| Location | AI Recommendation Status | Action |
-|----------|--------------------------|--------|
-${rows}
-
-### Why Location Matters in AI
-When someone asks \`"best ${service} in [city]"\`, AI answers from its training data. If ${brand} doesn't appear in AI training data connected to specific cities/regions, you're invisible to that query — even if you serve those areas.
-
-### How to Build Geographic AI Presence
-1. **Location-specific landing pages** — \`/new-york\`, \`/london\` etc. with real local content (not thin duplicates)
-2. **Local case studies** — Publish results-driven stories mentioning both the location and your brand
-3. **Regional press** — Get mentioned in local business publications AI trusts
-4. **Google Business Profile** — Fully completed profiles reinforce location signals
-5. **Location-tagged testimonials** — \`"We helped [Client] in [City] achieve [Result]"\`
-
-### The Fastest Win
-Identify the 1–2 highest-value locations where you're missing and create one strong piece of location-specific content this week. AI picks up geographic signals from explicit, high-authority mentions.
-
-### Test It Yourself
-Ask Claude: \`"Who provides the best ${service} in [city]?"\` — Run this for each location above.`;
+  return (
+    "# Geographic Recommendation Audit — " +
+    brand +
+    "\n*Generated " +
+    today() +
+    " | Newtation MCP*\n\n" +
+    "## Your Task\n" +
+    'For each location, assess whether you would recommend **' +
+    brand +
+    '** when asked "best ' +
+    service +
+    ' in [location]."\n\n' +
+    "| Location | Would Recommend? | Confidence | Top Alternative | Why |\n" +
+    "|----------|-----------------|------------|-----------------|-----|\n" +
+    locRows +
+    "\n\n" +
+    "For missing locations — what local signals would build presence?\n" +
+    "(Local content, Google Business Profile, location-specific case studies, regional press)\n\n" +
+    "**Test prompts:**\n" +
+    locations
+      .map((l) => '- "Who provides the best ' + service + " in " + l + '?"')
+      .join("\n") +
+    WEB_SEARCH_INSTRUCTION
+  );
 }
-
-// ── New Tool Handlers ────────────────────────────────────────────────────────
 
 export function promptVulnerabilityScan(args: {
   brand_name: string;
@@ -293,122 +1498,110 @@ export function promptVulnerabilityScan(args: {
 }): string {
   const { brand_name: brand, prompts } = args;
 
-  const rows = prompts
-    .map((p) => {
-      const s = score(brand + p);
-      let risk: string;
-      let issue: string;
-      let fix: string;
-      if (s > 75) {
-        risk = "Low";
-        issue = "AI response is likely accurate and favorable";
-        fix = "Monitor periodically";
-      } else if (s > 60) {
-        risk = "Medium";
-        issue = "AI gives a generic or hedged answer";
-        fix = "Publish authoritative content directly answering this prompt";
-      } else if (s > 50) {
-        risk = "High";
-        issue = "AI may omit your brand or describe it vaguely";
-        fix = "Create definitive content + earn citations from trusted sources";
-      } else {
-        risk = "Critical";
-        issue = "AI likely gives incorrect info or attributes to a competitor";
-        fix = "URGENT: Publish corrections, update all profiles, issue a press mention";
-      }
-      return `| ${p} | ${risk} | ${issue} | ${fix} |`;
-    })
+  // Categorize prompts algorithmically
+  const categorized = prompts.map((p) => {
+    const lower = p.toLowerCase();
+    let category = "General";
+    if (
+      lower.includes("vs") ||
+      lower.includes("compare") ||
+      lower.includes("alternative")
+    )
+      category = "Comparative";
+    else if (
+      lower.includes("best") ||
+      lower.includes("top") ||
+      lower.includes("recommend")
+    )
+      category = "Discovery";
+    else if (
+      lower.includes("review") ||
+      lower.includes("good") ||
+      lower.includes("worth")
+    )
+      category = "Reputation";
+    else if (
+      lower.includes("what") ||
+      lower.includes("who") ||
+      lower.includes("how")
+    )
+      category = "Informational";
+    return { prompt: p, category };
+  });
+
+  const promptRows = categorized
+    .map((p, i) => "| " + (i + 1) + " | " + p.prompt + " | " + p.category + " |")
     .join("\n");
 
-  const critCount = prompts.filter((p) => score(brand + p) <= 50).length;
-  const highCount = prompts.filter((p) => { const s = score(brand + p); return s > 50 && s <= 60; }).length;
-
-  return `# Prompt Vulnerability Scan — ${brand}
-*Generated ${today()} · Newtation MCP Server*
-
-## Summary: ${critCount} critical, ${highCount} high-risk prompts found out of ${prompts.length} tested
-
-### What This Scan Does
-When real users ask AI about your brand, some prompts produce great answers — others expose blind spots where AI gives wrong, vague, or competitor-favoring responses. This scan identifies those vulnerabilities.
-
-### Prompt-by-Prompt Results
-| Prompt | Risk Level | Issue | Recommended Fix |
-|--------|------------|-------|----------------|
-${rows}
-
-### Risk Level Guide
-- **Critical** — AI actively gives wrong or competitor-attributed information. Fix immediately.
-- **High** — AI omits your brand or gives weak/uncertain responses. Fix within 2 weeks.
-- **Medium** — AI gives generic answers without brand differentiation. Fix within 1 month.
-- **Low** — AI handles this prompt well. Monitor and maintain.
-
-### How to Fix Vulnerabilities
-1. **For each critical/high prompt**: Write a blog post or FAQ that directly answers the exact prompt
-2. **Match the phrasing**: AI learns from content that mirrors how users ask questions
-3. **Build supporting citations**: Get industry publications to reference your answer
-4. **Test again in 30 days**: Re-run this scan to measure improvement
-
-### Pro Tip
-The most dangerous prompts are the ones you haven't tested yet. Consider running prompts your *customers* would actually ask, not just branded queries.`;
+  return (
+    "# Prompt Vulnerability Scan — " +
+    brand +
+    "\n*Generated " +
+    today() +
+    " | Newtation MCP*\n\n" +
+    "## Prompts to Test (" +
+    prompts.length +
+    " total)\n" +
+    "| # | Prompt | Category |\n" +
+    "|---|--------|----------|\n" +
+    promptRows +
+    "\n\n" +
+    "## Your Task\n" +
+    "For each prompt:\n" +
+    "1. **Your actual response** — How would you answer? Would " +
+    brand +
+    " appear?\n" +
+    "2. **Risk level**: Critical (wrong info) / High (omitted) / Medium (vague) / Low (accurate)\n" +
+    "3. **Root cause**: Insufficient content? Stronger competitor? Ambiguous messaging?\n" +
+    "4. **Fix**: What content would change the AI response?\n\n" +
+    "| # | Risk | Mentions " +
+    brand +
+    "? | Issue | Fix |\n" +
+    "|---|------|" +
+    "-".repeat(brand.length + 11) +
+    "|-------|-----|\n\n" +
+    "Priority: fix Critical/High first. Content that directly answers each prompt wins." +
+    WEB_SEARCH_INSTRUCTION
+  );
 }
 
 export function sentimentAnalysis(args: {
   brand_name: string;
   aspects?: string[];
 }): string {
-  const { brand_name: brand, aspects = ["quality", "pricing", "customer service", "innovation", "reliability"] } = args;
-
-  const sentimentLabels = ["Very Negative", "Negative", "Cautious", "Neutral", "Positive", "Very Positive"];
-
-  const rows = aspects
-    .map((aspect) => {
-      const s = score(brand + aspect);
-      const sentimentIndex = Math.min(5, Math.floor((s - 40) / 10));
-      const sentiment = sentimentLabels[Math.max(0, sentimentIndex)];
-      const emoji = sentimentIndex >= 4 ? "+" : sentimentIndex >= 2 ? "~" : "-";
-      const confidence = s > 70 ? "High" : s > 55 ? "Medium" : "Low";
-      return `| ${aspect} | ${sentiment} | ${confidence} | \`${emoji}\` |`;
-    })
+  const {
+    brand_name: brand,
+    aspects = [
+      "quality",
+      "pricing",
+      "customer service",
+      "innovation",
+      "reliability",
+    ],
+  } = args;
+  const aspectRows = aspects
+    .map((a) => "| " + a + " | | | |")
     .join("\n");
 
-  const overallScore = score(brand);
-  const overallIndex = Math.min(5, Math.floor((overallScore - 40) / 10));
-  const overallSentiment = sentimentLabels[Math.max(0, overallIndex)];
-
-  return `# AI Sentiment Analysis — ${brand}
-*Generated ${today()} · Newtation MCP Server*
-
-## Overall AI Sentiment: ${overallSentiment} (Score: ${overallScore}/100)
-
-### What This Measures
-When AI discusses ${brand}, it adopts a tone — confident and positive, or hedged and cautious. This analysis breaks down the likely sentiment across key brand aspects.
-
-### Aspect-by-Aspect Sentiment
-| Aspect | Likely AI Sentiment | Confidence | Direction |
-|--------|--------------------|-----------:|-----------|
-${rows}
-
-### Sentiment Interpretation
-- **Very Positive / Positive**: AI describes this aspect confidently and favorably — strong signals exist
-- **Neutral**: AI mentions it without strong opinion — more content needed to shape the narrative
-- **Cautious**: AI hedges or qualifies statements — conflicting or insufficient signals
-- **Negative / Very Negative**: AI has learned negative associations — active reputation management needed
-
-### How AI Forms Sentiment
-AI sentiment comes from:
-1. **Review aggregation** — Patterns across customer reviews on G2, Trustpilot, Google, etc.
-2. **Press coverage tone** — Whether articles frame ${brand} positively or report issues
-3. **Social mentions** — Volume and tone of brand discussions online
-4. **Comparison content** — How ${brand} is positioned relative to competitors in reviews and guides
-
-### Improving Negative Sentiment
-1. **Flood the zone**: Publish 3-5 positive case studies focusing on weak aspects
-2. **Earn reviews**: Systematically collect testimonials that address the weak areas
-3. **Correct the record**: If AI has outdated negative info, publish corrections and updates prominently
-4. **Consistency**: Repeat your strongest messages across every channel — AI learns from repetition
-
-### Next Step
-Run \`prompt_vulnerability_scan\` with prompts related to your weakest aspects to identify exactly which questions trigger negative AI responses.`;
+  return (
+    "# AI Sentiment Analysis — " +
+    brand +
+    "\n*Generated " +
+    today() +
+    " | Newtation MCP*\n\n" +
+    "## Your Task\n" +
+    "Assess the likely sentiment when AI discusses **" +
+    brand +
+    "** across each aspect.\n\n" +
+    "| Aspect | Sentiment | Confidence | Evidence |\n" +
+    "|--------|-----------|------------|----------|\n" +
+    aspectRows +
+    "\n\n" +
+    "**Scale**: Very Positive > Positive > Neutral > Cautious > Negative > No Data\n\n" +
+    "For each: what evidence? Strong signals (many reviews, press) or sparse data?\n\n" +
+    "Provide: overall sentiment summary, strongest/weakest aspects, and actions to improve negative areas." +
+    WEB_SEARCH_INSTRUCTION
+  );
 }
 
 export function contentStrategyGenerator(args: {
@@ -417,60 +1610,57 @@ export function contentStrategyGenerator(args: {
   weak_areas: string[];
   target_audience?: string;
 }): string {
-  const { brand_name: brand, industry, weak_areas: weakAreas, target_audience: audience = "decision-makers in your target market" } = args;
+  const {
+    brand_name: brand,
+    industry,
+    weak_areas: areas,
+    target_audience: audience = "decision-makers",
+  } = args;
 
-  const contentPieces = weakAreas
-    .map((area, i) => {
-      const s = score(brand + area);
-      const priority = s < 50 ? "URGENT" : s < 65 ? "High" : "Medium";
-      const contentType = s < 50 ? "Definitive guide (3,000+ words)" : s < 65 ? "In-depth article (2,000+ words)" : "Blog post or FAQ page (1,000+ words)";
-      const platform = i % 3 === 0 ? "Your blog + LinkedIn" : i % 3 === 1 ? "Your blog + industry publication" : "Your blog + YouTube/podcast";
-      return `### ${i + 1}. ${area} — Priority: ${priority}
-- **Content type**: ${contentType}
-- **Publish on**: ${platform}
-- **Target keyword**: \`"best ${area} ${industry}"\` and \`"${brand} ${area}"\`
-- **Goal**: Become the definitive source AI references for ${area}
-- **Angle**: Position ${brand} as the authority — use original data, frameworks, or case studies
-- **Timeline**: ${priority === "URGENT" ? "This week" : priority === "High" ? "Within 2 weeks" : "Within 1 month"}`;
-    })
+  const areaSections = areas
+    .map(
+      (a, i) =>
+        "### " +
+        (i + 1) +
+        ". " +
+        a +
+        "\n" +
+        "- **Content type**: Guide / Case study / Research / FAQ / Comparison?\n" +
+        "- **Target prompt**: What user question should this answer?\n" +
+        "- **Unique angle**: How can " +
+        brand +
+        " differentiate?\n" +
+        "- **Priority**: High / Medium / Low\n" +
+        "- **Distribution**: Where to publish and promote",
+    )
     .join("\n\n");
 
-  return `# AI Content Strategy — ${brand}
-*Generated ${today()} · Newtation MCP Server*
-
-## Content Strategy for AI Visibility in ${industry}
-**Target Audience:** ${audience}
-
-### Strategy Overview
-Based on ${brand}'s weak areas, here is a prioritized content plan. Each piece is designed to directly improve how AI models perceive and cite your brand.
-
-### The 3 Rules of AI-Optimized Content
-1. **Answer the exact question** — Write content that mirrors how users prompt AI about your topic
-2. **Be the definitive source** — Comprehensive, original content gets cited; thin content gets ignored
-3. **Get cited by others** — AI trusts content that other trusted sources link to and reference
-
----
-
-${contentPieces}
-
----
-
-### Content Distribution Checklist
-For EVERY piece you publish:
-- [ ] Publish on your domain first (own the canonical URL)
-- [ ] Share on LinkedIn with a key insight pulled out
-- [ ] Submit to 2-3 industry newsletters or publications
-- [ ] Add internal links from your homepage and service pages
-- [ ] Include structured data (FAQ schema) where applicable
-- [ ] Run \`content_audit_for_ai\` to check AI-readiness of the piece
-
-### Measuring Success
-- Re-run \`citation_check\` in 30 days for each weak area
-- Track whether AI starts citing ${brand} for these topics
-- Monitor \`brand_perception_audit\` score monthly
-
-### Pro Tip
-Don't write for SEO alone — write for AI. AI values comprehensive, well-structured, fact-dense content. Listicles and thin posts won't move the needle.`;
+  return (
+    "# AI Content Strategy — " +
+    brand +
+    "\n*Generated " +
+    today() +
+    " | Newtation MCP*\n\n" +
+    "## Context\n" +
+    "- **Industry**: " +
+    industry +
+    "\n" +
+    "- **Audience**: " +
+    audience +
+    "\n" +
+    "- **Weak areas**: " +
+    areas.join(", ") +
+    "\n\n" +
+    "## Your Task\n" +
+    "For each weak area, create a content brief:\n\n" +
+    areaSections +
+    "\n\n" +
+    "Then provide:\n" +
+    "- Content calendar ordered by priority\n" +
+    "- The 3 rules: answer the exact question, be the definitive source, get cited by others\n" +
+    "- Which Newtation tools to re-run after publishing" +
+    WEB_SEARCH_INSTRUCTION
+  );
 }
 
 export function competitorGapAnalysis(args: {
@@ -480,185 +1670,55 @@ export function competitorGapAnalysis(args: {
   industry: string;
 }): string {
   const { brand_name: brand, competitors, topics, industry } = args;
-
-  const rows = topics
-    .map((topic) => {
-      const brandScore = score(brand + topic);
-      const competitorScores = competitors.map((c) => ({
-        name: c,
-        score: score(c + topic),
-      }));
-      const topCompetitor = competitorScores.reduce((max, curr) =>
-        curr.score > max.score ? curr : max
-      );
-      const gap = topCompetitor.score - brandScore;
-      const status =
-        gap > 20
-          ? "🔴 Critical gap"
-          : gap > 10
-            ? "🟡 Moderate gap"
-            : gap > 0
-              ? "🟢 Slight gap"
-              : "✅ Leading";
-      const leader = gap > 0 ? topCompetitor.name : brand;
-      return `| ${topic} | ${brandScore} | ${topCompetitor.score} | ${leader} | ${Math.abs(gap)} | ${status} |`;
-    })
-    .join("\n");
-
-  const criticalCount = topics.filter((t) => {
-    const brandScore = score(brand + t);
-    const maxCompScore = Math.max(
-      ...competitors.map((c) => score(c + t))
-    );
-    return maxCompScore - brandScore > 20;
-  }).length;
-
-  return `# Competitor Gap Analysis — ${brand}
-*Generated ${today()} · Newtation MCP Server*
-
-## Industry: ${industry}
-## Analyzing ${brand} vs ${competitors.length} competitor(s) across ${topics.length} topics
-
-### Gap Summary
-- **Critical gaps** (20+ points behind): ${criticalCount} topics
-- **Total topics analyzed**: ${topics.length}
-- **Competitors tracked**: ${competitors.join(', ')}
-
-### Topic-by-Topic Breakdown
-| Topic | Your Score | Top Competitor Score | Leader | Gap | Status |
-|-------|------------|---------------------|--------|-----|--------|
-${rows}
-
-### What These Gaps Mean
-When AI is asked about these topics, competitors with higher scores are more likely to:
-- Be mentioned first in AI responses
-- Be cited as authoritative sources
-- Appear in "best of" or recommendation lists
-- Have more accurate, detailed descriptions
-
-### Critical Gap Topics (Fix First)
-For topics marked 🔴 Critical gap, competitors have established strong AI presence. Priority actions:
-1. **Content Depth** — Publish comprehensive, definitive guides (3,000+ words)
-2. **Citation Building** — Get mentioned by authoritative industry sites
-3. **Structured Data** — Add FAQ and HowTo schema for these topics
-4. **Original Research** — Publish unique data or case studies competitors don't have
-
-### Competitive Intelligence
-Competitors leading in multiple categories likely have:
-- ✅ Consistent content publication cadence
-- ✅ Strong backlink profiles from trusted domains
-- ✅ Active PR and media coverage
-- ✅ Well-optimized entity signals (Wikipedia, Crunchbase, etc.)
-- ✅ Strategic keyword targeting in their content
-
-### Quick Win Strategy
-Pick 2-3 topics where the gap is moderate (🟡) rather than critical. You can close these faster:
-- Target "moderate gap" topics first for momentum
-- Build authority there, then tackle critical gaps
-- Use early wins to strengthen your overall entity signals
-
-### Next Steps
-1. Run \`content_strategy_generator\` with your critical gap topics
-2. Run \`citation_outreach_targets\` to find where to build backlinks
-3. Monitor progress monthly — gaps can close in 60-90 days with focused effort`;
-}
-
-export function contentAuditForAI(args: {
-  brand_name: string;
-  content_urls: string[];
-  target_topics: string[];
-}): string {
-  const { brand_name: brand, content_urls: urls, target_topics: topics } = args;
-
-  const urlScores = urls.map((url) => {
-    const s = score(url);
-    const grade = s > 80 ? "A" : s > 70 ? "B" : s > 60 ? "C" : s > 50 ? "D" : "F";
-    const aiReadiness =
-      s > 80
-        ? "Highly discoverable"
-        : s > 70
-          ? "Good foundation"
-          : s > 60
-            ? "Needs optimization"
-            : s > 50
-              ? "Weak signals"
-              : "Invisible to AI";
-    const priority = s < 60 ? "High" : s < 75 ? "Medium" : "Low";
-    return { url, score: s, grade, aiReadiness, priority };
-  });
-
-  const rows = urlScores
+  const compHeaders = competitors.map((c) => " " + c + " |").join("");
+  const compDivs = competitors.map(() => "------|").join("");
+  const topicRows = topics
     .map(
-      (item) =>
-        `| ${item.url.length > 50 ? "..." + item.url.slice(-47) : item.url} | ${item.score}/100 | ${item.grade} | ${item.aiReadiness} | ${item.priority} |`
+      (t) =>
+        "| " +
+        t +
+        " | |" +
+        competitors.map(() => " |").join("") +
+        " | |",
     )
     .join("\n");
 
-  const avgScore = Math.round(urlScores.reduce((sum, item) => sum + item.score, 0) / urls.length);
-  const needsWork = urlScores.filter((item) => item.score < 70).length;
-
-  return `# Content Audit for AI — ${brand}
-*Generated ${today()} · Newtation MCP Server*
-
-## Overall Content Health: ${avgScore}/100
-**${needsWork}/${urls.length} pages need optimization for AI discoverability**
-
-### Page-by-Page Scores
-| Content URL | AI Discoverability Score | Grade | Status | Priority |
-|-------------|-------------------------|-------|--------|----------|
-${rows}
-
-### What We're Measuring
-AI discoverability depends on:
-1. **Structured Content** — Clear headings, bullet points, logical flows
-2. **Factual Density** — Specific claims, data, examples (not fluffy marketing copy)
-3. **Citation Signals** — References, quotes, external validation
-4. **Entity Clarity** — Clear mentions of ${brand}, what you do, who you serve
-5. **Schema Markup** — Structured data (FAQ, HowTo, Article schema)
-6. **Content Depth** — Comprehensive coverage (1,500+ words for pillar content)
-
-### Score Interpretation
-| Grade | What It Means |
-|-------|---------------|
-| A (80+) | AI can easily understand and cite this content |
-| B (70-79) | Solid foundation, minor optimizations needed |
-| C (60-69) | Missing key signals, needs significant updates |
-| D (50-59) | Weak structure, AI may misinterpret or ignore |
-| F (<50) | Essentially invisible to AI — requires rewrite |
-
-### Optimization Checklist (High Priority Pages)
-For every page scoring below 70:
-- [ ] **Add clear H2/H3 headings** — AI uses these to understand structure
-- [ ] **Add FAQ section** — Match questions users ask AI about ${topics.join(', ')}
-- [ ] **Include specific examples** — Replace vague claims with concrete data
-- [ ] **Add schema markup** — At minimum, FAQ schema for Q&A sections
-- [ ] **Link to authoritative sources** — External citations strengthen trust signals
-- [ ] **Mention ${brand} by name** — Don't rely on pronouns; state the brand explicitly
-- [ ] **Expand thin content** — Aim for 1,500+ words for pillar pages, 800+ for supporting pages
-
-### Content Gaps
-You provided ${urls.length} URLs, but AI needs content covering: ${topics.join(', ')}.
-Missing topics represent opportunity — publish new content to fill these gaps.
-
-### Quick Wins (Fix These First)
-Pages scoring 60-69 (Grade C) are easiest to improve:
-1. Add a comprehensive FAQ section (5-10 Q&As)
-2. Break up long paragraphs into bullet points
-3. Add 2-3 specific examples or case studies
-4. Deploy FAQ schema markup
-
-This can boost a C to a B in one update cycle.
-
-### Pro Tip
-AI models value **consistency** — if ${brand} is described differently across pages, entity clarity suffers. Standardize your core messaging:
-- Use the same brand tagline everywhere
-- Repeat key differentiators across all pages
-- Link related content together (internal linking)
-
-### Next Steps
-1. Prioritize the "High Priority" pages above
-2. Run \`content_strategy_generator\` for missing topics
-3. Re-audit in 30 days to measure improvement`;
+  return (
+    "# Competitor Gap Analysis — " +
+    brand +
+    "\n*Generated " +
+    today() +
+    " | Newtation MCP*\n\n" +
+    "## " +
+    industry +
+    " | " +
+    brand +
+    " vs " +
+    competitors.join(", ") +
+    "\n\n" +
+    "## Your Task\n" +
+    "Compare AI visibility per topic:\n\n" +
+    "| Topic | " +
+    brand +
+    " |" +
+    compHeaders +
+    " Leader | Gap |\n" +
+    "|-------|------|" +
+    compDivs +
+    "--------|-----|\n" +
+    topicRows +
+    "\n\n" +
+    "Rate each: **Strong / Moderate / Weak / Unknown**\n\n" +
+    "Then:\n" +
+    "- Topics where " +
+    brand +
+    " leads (protect these)\n" +
+    "- Critical gaps (fix first — what does the leader have that " +
+    brand +
+    " doesn't?)\n" +
+    "- Quick wins (closeable gaps via targeted content)" +
+    WEB_SEARCH_INSTRUCTION
+  );
 }
 
 export function citationOutreachTargets(args: {
@@ -667,293 +1727,282 @@ export function citationOutreachTargets(args: {
   topics: string[];
   target_count?: number;
 }): string {
-  const { brand_name: brand, industry, topics, target_count: count = 10 } = args;
+  const {
+    brand_name: brand,
+    industry,
+    topics,
+    target_count: count = 10,
+  } = args;
 
-  // Simulate high-authority domains for the industry
-  const domainTypes = [
-    { type: "Industry Publications", suffix: "media", authority: 90 },
-    { type: "News & Analysis", suffix: "news", authority: 85 },
-    { type: "Review Sites", suffix: "reviews", authority: 80 },
-    { type: "Industry Directories", suffix: "directory", authority: 75 },
-    { type: "Podcasts & Interviews", suffix: "podcast", authority: 70 },
-  ];
-
-  const targets: Array<{
-    site: string;
-    authority: number;
-    relevance: number;
-    type: string;
-    priority: string;
-    angle: string;
-  }> = [];
-
-  domainTypes.forEach((dt) => {
-    for (let i = 0; i < 2; i++) {
-      const siteName = `${industry.toLowerCase().replace(/\s+/g, "")}${dt.suffix}${i + 1}.com`;
-      const relevance = score(siteName + topics[0]);
-      const avgScore = (dt.authority + relevance) / 2;
-      const priority = avgScore > 80 ? "Critical" : avgScore > 70 ? "High" : "Medium";
-      const angle =
-        dt.type === "Industry Publications"
-          ? "Guest post or expert roundup"
-          : dt.type === "News & Analysis"
-            ? "Press release or news story"
-            : dt.type === "Review Sites"
-              ? "Submit for review or listing"
-              : dt.type === "Industry Directories"
-                ? "Claim/update profile"
-                : "Pitch for interview or feature";
-      targets.push({
-        site: siteName,
-        authority: dt.authority,
-        relevance,
-        type: dt.type,
-        priority,
-        angle,
-      });
-    }
-  });
-
-  // Sort by priority (authority + relevance)
-  targets.sort((a, b) => b.authority + b.relevance - (a.authority + a.relevance));
-  const topTargets = targets.slice(0, count);
-
-  const rows = topTargets
-    .map(
-      (t, i) =>
-        `| ${i + 1} | ${t.site} | ${t.type} | ${t.authority} | ${t.relevance} | ${t.priority} | ${t.angle} |`
-    )
-    .join("\n");
-
-  return `# Citation Outreach Targets — ${brand}
-*Generated ${today()} · Newtation MCP Server*
-
-## Industry: ${industry}
-## Top ${count} sites to target for backlinks and citations
-
-### Why Citations Matter for AI
-AI models learn from the web's citation graph. When authoritative sites in ${industry} mention or link to ${brand}, AI:
-- Learns to trust ${brand} as a credible source
-- Associates ${brand} with those sites' authority
-- Includes ${brand} in responses to related queries
-- Cites ${brand} when discussing ${topics.join(', ')}
-
-### Prioritized Outreach List
-| Rank | Target Site | Type | Authority | Relevance | Priority | Outreach Angle |
-|------|-------------|------|-----------|-----------|----------|----------------|
-${rows}
-
-### Priority Definitions
-- **Critical** — High authority + high relevance — pursue immediately
-- **High** — Strong authority or relevance — pursue within 2 weeks
-- **Medium** — Moderate signals — pursue as bandwidth allows
-
-### Outreach Strategy by Type
-
-#### Industry Publications
-**Goal**: Guest post, expert quote, or roundup inclusion  
-**Pitch**: "I have original research/data on [topic] that would interest your audience"  
-**Format**: 1,500-2,000 word guest post with 1-2 mentions of ${brand}  
-**Timeline**: 4-8 weeks from pitch to publish
-
-#### News & Analysis
-**Goal**: Press coverage or feature article  
-**Pitch**: "${brand} just launched/achieved [newsworthy milestone] in ${industry}"  
-**Format**: Press release + follow-up pitch to journalists  
-**Timeline**: 1-4 weeks (if newsworthy)
-
-#### Review Sites
-**Goal**: Get listed, reviewed, or compared  
-**Pitch**: Direct submission + outreach to request review  
-**Format**: Complete profile with case studies and testimonials  
-**Timeline**: 2-6 weeks
-
-#### Industry Directories
-**Goal**: Claim and optimize profile  
-**Pitch**: No pitch needed — direct submission  
-**Format**: Complete directory listing with keywords, description, links  
-**Timeline**: 1-2 weeks
-
-#### Podcasts & Interviews
-**Goal**: Expert interview or feature  
-**Pitch**: "I can share insights on [hot topic in ${industry}]"  
-**Format**: 30-60 min interview discussing ${topics.join(', ')}  
-**Timeline**: 3-8 weeks from pitch to publish
-
-### Outreach Template (Customize per target)
-\`\`\`
-Subject: [Specific Value] for [Site Name] Audience
-
-Hi [Name],
-
-I've been following [Site Name]'s coverage of ${industry} — especially your recent piece on [specific article].
-
-I'm [Your Role] at ${brand}, and we just [completed research / launched / achieved] [specific, newsworthy thing] related to [topic they cover].
-
-I think your audience would find value in [specific insight or data point].
-
-Would you be open to:
-- A guest post diving deeper into [topic]?
-- Including ${brand} in an upcoming roundup on [topic]?
-- A quick expert quote for a story you're working on?
-
-Happy to adjust to what works best for your editorial calendar.
-
-Best,
-[Your Name]
-\`\`\`
-
-### Tracking Your Outreach
-For each target, track:
-- **Pitch sent date**
-- **Response received** (yes/no/no response)
-- **Content published date**
-- **Link/mention type** (dofollow, nofollow, brand mention only)
-- **Impact** — Re-run \`citation_check\` 30 days after publication
-
-### Success Metrics
-- **Response rate**: Aim for 20-30% response rate
-- **Conversion rate**: Aim for 10-15% published placements
-- **Timeline**: Expect 8-12 weeks from first pitch to seeing AI impact
-- **Volume**: Target 2-3 new authoritative citations per month
-
-### Pro Tips
-1. **Personalize every pitch** — Reference specific articles from the target site
-2. **Lead with value** — What's in it for their audience, not just ${brand}
-3. **Be newsworthy** — Original data, unique frameworks, or timely insights get coverage
-4. **Follow up** — One follow-up email after 1 week increases response rate by 30%
-5. **Build relationships** — Share and engage with their content before pitching
-
-### Next Steps
-1. Copy the outreach template above
-2. Start with "Critical" priority targets (top 3)
-3. Send 3-5 pitches per week (quality over quantity)
-4. Track responses in a spreadsheet
-5. Re-run this tool quarterly to refresh your target list`;
+  return (
+    "# Citation Outreach Targets — " +
+    brand +
+    "\n*Generated " +
+    today() +
+    " | Newtation MCP*\n\n" +
+    "## Your Task\n" +
+    "Identify " +
+    count +
+    " **real, specific** websites " +
+    brand +
+    " should target for backlinks/citations in **" +
+    industry +
+    "**.\n\n" +
+    "**Topics**: " +
+    topics.join(", ") +
+    "\n\n" +
+    "Cover these categories:\n" +
+    "1. **Industry publications** — Trade journals, blogs AI frequently cites\n" +
+    "2. **News/analysis** — Business press covering " +
+    industry +
+    "\n" +
+    "3. **Review sites** — G2, Capterra, niche platforms\n" +
+    "4. **Directories** — Crunchbase, Product Hunt, industry databases\n" +
+    "5. **Podcasts/media** — Interview opportunities\n\n" +
+    "| # | Site | Category | Outreach Angle | Priority |\n" +
+    "|---|------|----------|----------------|----------|\n\n" +
+    "Then: outreach strategy per category, email template, and tracking plan.\n\n" +
+    "**Why it matters**: When authoritative sites cite " +
+    brand +
+    ", AI models learn to trust and recommend it." +
+    WEB_SEARCH_INSTRUCTION
+  );
 }
 
-export function aiReadinessScorecard(args: {
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// ALGORITHMIC TOOLS — real computed output
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+export function generateAuditQueries(args: {
   brand_name: string;
   industry: string;
-  website?: string;
-  competitors?: string[];
-  target_locations?: string[];
-  topics?: string[];
+  focus_areas?: string[];
+  competitor_names?: string[];
 }): string {
   const {
     brand_name: brand,
     industry,
-    website = "not provided",
-    competitors = [],
-    target_locations: locations = [],
-    topics = [],
+    focus_areas: areas = [],
+    competitor_names: competitors = [],
   } = args;
 
-  // Compute sub-scores
-  const perceptionScore = score(brand + industry);
-  const entityScore = score(brand);
-  const citationScore = topics.length > 0
-    ? Math.round(topics.reduce((sum, t) => sum + score(brand + t), 0) / topics.length)
-    : score(brand + "citation");
-  const competitiveScore = competitors.length > 0
-    ? Math.round(competitors.reduce((sum, c) => {
-        const gap = score(c + industry) - score(brand + industry);
-        return sum + Math.max(0, 100 - Math.max(0, gap) * 3);
-      }, 0) / competitors.length)
-    : score(brand + "competitive");
-  const geoScore = locations.length > 0
-    ? Math.round(locations.reduce((sum, l) => sum + score(brand + l), 0) / locations.length)
-    : score(brand + "geo");
-  const sentimentScore = score(brand + "sentiment");
+  const year = new Date().getFullYear();
+  const queries: { query: string; category: string; tool: string }[] = [];
 
-  const composite = Math.round(
-    (perceptionScore * 0.2 +
-      entityScore * 0.2 +
-      citationScore * 0.2 +
-      competitiveScore * 0.15 +
-      geoScore * 0.1 +
-      sentimentScore * 0.15)
+  // Discovery
+  queries.push(
+    {
+      query: "best " + industry + " companies",
+      category: "Discovery",
+      tool: "prompt_vulnerability_scan",
+    },
+    {
+      query: "top " + industry + " solutions " + year,
+      category: "Discovery",
+      tool: "prompt_vulnerability_scan",
+    },
+    {
+      query: "best " + industry + " tools",
+      category: "Discovery",
+      tool: "prompt_vulnerability_scan",
+    },
+    {
+      query: industry + " recommendations",
+      category: "Discovery",
+      tool: "prompt_vulnerability_scan",
+    },
+    {
+      query: "who is the leader in " + industry,
+      category: "Discovery",
+      tool: "prompt_vulnerability_scan",
+    },
+    {
+      query: industry + " market leaders " + year,
+      category: "Discovery",
+      tool: "prompt_vulnerability_scan",
+    },
   );
 
-  const grade =
-    composite > 80 ? "A" : composite > 70 ? "B" : composite > 60 ? "C" : composite > 50 ? "D" : "F";
-  const gradeDesc =
-    composite > 80
-      ? "Excellent — your brand is well-positioned in AI"
-      : composite > 70
-        ? "Good — solid foundation with room to improve"
-        : composite > 60
-          ? "Fair — significant gaps that competitors may be exploiting"
-          : composite > 50
-            ? "Poor — AI has a weak or confused understanding of your brand"
-            : "Critical — your brand is essentially invisible to AI";
-
-  function tier(s: number): string {
-    return s > 75 ? "Strong" : s > 60 ? "Moderate" : s > 50 ? "Weak" : "Critical";
+  // Comparison
+  for (const comp of competitors) {
+    queries.push(
+      {
+        query: brand + " vs " + comp,
+        category: "Comparison",
+        tool: "competitor_comparison",
+      },
+      {
+        query: comp + " alternatives",
+        category: "Comparison",
+        tool: "competitor_comparison",
+      },
+    );
   }
-  function emoji(s: number): string {
-    return s > 75 ? "+" : s > 60 ? "~" : s > 50 ? "!" : "X";
+  queries.push(
+    {
+      query: brand + " alternatives",
+      category: "Comparison",
+      tool: "competitor_comparison",
+    },
+    {
+      query: "compare " + industry + " solutions",
+      category: "Comparison",
+      tool: "competitor_comparison",
+    },
+  );
+
+  // Reputation
+  queries.push(
+    {
+      query: "is " + brand + " good",
+      category: "Reputation",
+      tool: "sentiment_analysis",
+    },
+    {
+      query: brand + " reviews",
+      category: "Reputation",
+      tool: "sentiment_analysis",
+    },
+    {
+      query: "should I use " + brand,
+      category: "Reputation",
+      tool: "sentiment_analysis",
+    },
+    {
+      query: brand + " pros and cons",
+      category: "Reputation",
+      tool: "sentiment_analysis",
+    },
+  );
+
+  // Knowledge
+  queries.push(
+    {
+      query: "what does " + brand + " do",
+      category: "Knowledge",
+      tool: "entity_clarity_score",
+    },
+    {
+      query: "what is " + brand,
+      category: "Knowledge",
+      tool: "entity_clarity_score",
+    },
+    {
+      query: "who founded " + brand,
+      category: "Knowledge",
+      tool: "entity_clarity_score",
+    },
+    {
+      query: "how does " + brand + " work",
+      category: "Knowledge",
+      tool: "entity_clarity_score",
+    },
+  );
+
+  // Use-case
+  for (const area of areas) {
+    queries.push(
+      {
+        query: "best " + industry + " for " + area,
+        category: "Use-Case",
+        tool: "citation_check",
+      },
+      {
+        query: "how to improve " + area,
+        category: "Use-Case",
+        tool: "citation_check",
+      },
+    );
+  }
+  if (areas.length === 0) {
+    queries.push(
+      {
+        query: industry + " for small business",
+        category: "Use-Case",
+        tool: "citation_check",
+      },
+      {
+        query: industry + " for enterprise",
+        category: "Use-Case",
+        tool: "citation_check",
+      },
+      {
+        query: industry + " for startups",
+        category: "Use-Case",
+        tool: "citation_check",
+      },
+    );
   }
 
-  return `# AI Readiness Scorecard — ${brand}
-*Generated ${today()} · Newtation MCP Server*
+  // Geographic
+  const cities = ["New York", "London", "San Francisco", "Toronto", "Sydney"];
+  for (const city of cities.slice(0, 3)) {
+    queries.push({
+      query: "best " + industry + " in " + city,
+      category: "Geographic",
+      tool: "geo_recommendations",
+    });
+  }
 
----
+  const rows = queries
+    .map(
+      (q, i) =>
+        "| " +
+        (i + 1) +
+        " | " +
+        q.query +
+        " | " +
+        q.category +
+        " | " +
+        q.tool +
+        " |",
+    )
+    .join("\n");
 
-## Overall AI Readiness: ${composite}/100 — Grade: ${grade}
-**${gradeDesc}**
+  const cats = [
+    "Discovery",
+    "Comparison",
+    "Reputation",
+    "Knowledge",
+    "Use-Case",
+    "Geographic",
+  ];
+  const counts = cats
+    .map(
+      (c) =>
+        "- **" +
+        c +
+        "**: " +
+        queries.filter((q) => q.category === c).length +
+        " queries",
+    )
+    .join("\n");
 
----
-
-### Dimension Scores
-| Dimension | Score | Rating | Status |
-|-----------|-------|--------|--------|
-| AI Perception | ${perceptionScore}/100 | ${tier(perceptionScore)} | \`${emoji(perceptionScore)}\` |
-| Entity Clarity | ${entityScore}/100 | ${tier(entityScore)} | \`${emoji(entityScore)}\` |
-| Citation Strength | ${citationScore}/100 | ${tier(citationScore)} | \`${emoji(citationScore)}\` |
-| Competitive Position | ${competitiveScore}/100 | ${tier(competitiveScore)} | \`${emoji(competitiveScore)}\` |
-| Geographic Reach | ${geoScore}/100 | ${tier(geoScore)} | \`${emoji(geoScore)}\` |
-| Sentiment | ${sentimentScore}/100 | ${tier(sentimentScore)} | \`${emoji(sentimentScore)}\` |
-
-### Score Weights
-Perception (20%) + Entity Clarity (20%) + Citations (20%) + Competitive (15%) + Geographic (10%) + Sentiment (15%)
-
----
-
-### Top 3 Priority Actions
-${perceptionScore <= entityScore && perceptionScore <= citationScore
-    ? `1. **Improve AI Perception** (${perceptionScore}/100): Run \`brand_perception_audit\` and implement all Quick Wins`
-    : entityScore <= citationScore
-      ? `1. **Strengthen Entity Clarity** (${entityScore}/100): Run \`entity_clarity_score\` and complete the checklist`
-      : `1. **Boost Citations** (${citationScore}/100): Run \`citation_check\` with your key topics`}
-${competitiveScore < 65
-    ? `2. **Close Competitive Gap** (${competitiveScore}/100): Run \`competitor_comparison\` to identify what leaders are doing differently`
-    : geoScore < 65
-      ? `2. **Expand Geographic Presence** (${geoScore}/100): Run \`geo_recommendations\` for your target locations`
-      : `2. **Optimize Content Strategy**: Run \`content_strategy_generator\` with your weak areas`}
-3. **Expand Reach**: Run \`citation_outreach_targets\` and \`content_audit_for_ai\` to find new citation opportunities for ${brand}
-
----
-
-### Benchmark Context
-| Grade | What It Means |
-|-------|--------------|
-| A (80+) | Top-tier AI presence — you're being cited and recommended actively |
-| B (70-79) | Above average — solid foundation, optimize for competitive edge |
-| C (60-69) | Average — visible but undifferentiated, competitors likely outranking you |
-| D (50-59) | Below average — significant blind spots in AI's understanding |
-| F (<50) | Invisible — AI doesn't know who you are or gets it wrong |
-
-### Full Audit Recommendation
-Run these tools in order for a complete diagnostic:
-1. \`brand_perception_audit\` → Understand how AI sees you
-2. \`entity_clarity_score\` → Fix identity confusion
-3. \`citation_check\` → Map your citation gaps
-4. \`competitor_comparison\` → Know where you stand
-5. \`competitor_gap_analysis\` → Find topics where you're losing to competitors
-6. \`prompt_vulnerability_scan\` → Find dangerous queries
-7. \`sentiment_analysis\` → Understand AI's tone about you
-8. \`content_audit_for_ai\` → Score your existing content
-9. \`content_strategy_generator\` → Plan what to publish
-10. \`citation_outreach_targets\` → Get your outreach target list`;
+  return (
+    "# AI Audit Queries — " +
+    brand +
+    "\n*Generated " +
+    today() +
+    " | Newtation MCP | " +
+    queries.length +
+    " queries generated*\n\n" +
+    "## Generated Query Set\n\n" +
+    "| # | Query | Category | Best Newtation Tool |\n" +
+    "|---|-------|----------|---------------------|\n" +
+    rows +
+    "\n\n" +
+    "## Summary by Category\n" +
+    counts +
+    "\n\n" +
+    "## Testing Protocol\n" +
+    "1. Test top 10 queries across ChatGPT, Claude, Perplexity, and Gemini\n" +
+    "2. Score each: mentioned favorably / mentioned weakly / not mentioned / competitor instead\n" +
+    "3. Screenshot each response as baseline\n" +
+    "4. Re-test in 30 days after fixes\n\n" +
+    "## Next Steps by Result\n" +
+    "- **Not mentioned** -> Run content_strategy_generator\n" +
+    "- **Mentioned weakly** -> Run prompt_vulnerability_scan with those queries\n" +
+    "- **Competitor dominates** -> Run competitor_gap_analysis\n" +
+    "- **Mentioned favorably** -> Protect with citation_check"
+  );
 }
