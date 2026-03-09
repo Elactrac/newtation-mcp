@@ -8,12 +8,19 @@
 import type { AuthRequest, ClientInfo } from "@cloudflare/workers-oauth-provider";
 
 export class OAuthError extends Error {
+  public code: string;
+  public description: string;
+  public statusCode: number;
+
   constructor(
-    public code: string,
-    public description: string,
-    public statusCode = 400,
+    code: string,
+    description: string,
+    statusCode = 400,
   ) {
     super(description);
+    this.code = code;
+    this.description = description;
+    this.statusCode = statusCode;
     this.name = "OAuthError";
   }
 
