@@ -202,12 +202,13 @@ function extractHeadings(html: string, tag: string): string[] {
 function countWords(html: string): number {
   const body = html.match(/<body[^>]*>([\s\S]*)<\/body>/i)?.[1] ?? html;
   const text = body
-    .replace(/<script[\s\S]*?<\/script>/gi, "")
-    .replace(/<style[\s\S]*?<\/style>/gi, "")
-    .replace(/<[^>]+>/g, " ")
-    .replace(/\s+/g, " ")
+    .replace(/<(script|style)[\s\S]*?<\/\1>|<[^>]+>/gi, (match, p1) => {
+      return p1 ? "" : " ";
+    })
     .trim();
-  return text ? text.split(/\s+/).length : 0;
+
+  if (!text) return 0;
+  return text.match(/\S+/g)?.length ?? 0;
 }
 
 function countLinks(
