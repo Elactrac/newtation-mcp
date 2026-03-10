@@ -67,20 +67,35 @@ const OPEN_WORLD_ANNOTATIONS = {
   openWorldHint: true,
 } as const;
 
-// Props passed through from the OAuth flow, available as this.props
+/**
+ * Context properties provided by the OAuth flow.
+ * These are available within the agent via `this.props`.
+ */
 type Props = {
+  /** The GitHub login username of the authenticated user. */
   login: string;
+  /** The full name of the authenticated user. */
   name: string;
+  /** The email address of the authenticated user. */
   email: string;
+  /** The OAuth access token. */
   accessToken: string;
 };
 
+/**
+ * The core MCP Agent for Newtation.
+ *
+ * Exposes various tools and prompts related to brand auditing and AI perception.
+ */
 export class NewtationMCP extends McpAgent<Env, Record<string, never>, Props> {
   server = new McpServer({
     name: "newtation-mcp",
     version: "2.0.0",
   });
 
+  /**
+   * Initializes the MCP server by registering all available tools and prompt templates.
+   */
   async init() {
     // ── brand_perception_audit ──────────────────────────────────────────
     this.server.tool(

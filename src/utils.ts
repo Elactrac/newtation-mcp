@@ -1,5 +1,13 @@
 /**
  * Constructs an authorization URL for an upstream OAuth service.
+ *
+ * @param params - The parameters required to build the authorization URL.
+ * @param params.upstream_url - The base URL of the upstream OAuth provider's authorize endpoint.
+ * @param params.client_id - The client identifier issued by the upstream OAuth provider.
+ * @param params.scope - The space-separated list of scopes to request.
+ * @param params.redirect_uri - The URI to which the upstream provider should redirect after authorization.
+ * @param params.state - An optional opaque value used to maintain state between the request and the callback.
+ * @returns The fully constructed authorization URL.
  */
 export function getUpstreamAuthorizeUrl({
   upstream_url,
@@ -25,6 +33,14 @@ export function getUpstreamAuthorizeUrl({
 
 /**
  * Exchanges an authorization code for an access token from the upstream service.
+ *
+ * @param params - The parameters required to exchange the code for an access token.
+ * @param params.client_id - The client identifier issued by the upstream OAuth provider.
+ * @param params.client_secret - The client secret issued by the upstream OAuth provider.
+ * @param params.code - The authorization code received from the upstream authorize endpoint.
+ * @param params.redirect_uri - The redirect URI used in the initial authorization request.
+ * @param params.upstream_url - The URL of the upstream OAuth provider's token endpoint.
+ * @returns A tuple containing the access token and null on success, or null and a Response object on error.
  */
 export async function fetchUpstreamAuthToken({
   client_id,
@@ -62,10 +78,16 @@ export async function fetchUpstreamAuthToken({
   return [accessToken, null];
 }
 
-// Context from the auth process, stored in the token and passed to McpAgent as this.props
+/**
+ * Context from the auth process, stored in the token and passed to McpAgent as this.props.
+ */
 export type Props = {
+  /** The login username of the authenticated user. */
   login: string;
+  /** The full name of the authenticated user. */
   name: string;
+  /** The email address of the authenticated user. */
   email: string;
+  /** The access token obtained from the OAuth provider. */
   accessToken: string;
 };

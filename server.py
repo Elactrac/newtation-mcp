@@ -40,17 +40,49 @@ from datetime import datetime
 # ─── MCP Protocol Helpers ─────────────────────────────────────────────────────
 
 def send(obj: dict):
-    """Write a JSON-RPC message to stdout."""
+    """
+    Write a JSON-RPC message to stdout.
+
+    Args:
+        obj (dict): The JSON-RPC message to send.
+    """
     sys.stdout.write(json.dumps(obj) + "\n")
     sys.stdout.flush()
 
 def error_response(req_id, code: int, message: str) -> dict:
+    """
+    Format a JSON-RPC 2.0 error response.
+
+    Args:
+        req_id: The request ID from the incoming JSON-RPC message.
+        code (int): The JSON-RPC error code.
+        message (str): A descriptive error message.
+
+    Returns:
+        dict: A formatted JSON-RPC error response object.
+    """
     return {"jsonrpc": "2.0", "id": req_id, "error": {"code": code, "message": message}}
 
 def ok_response(req_id, result: dict) -> dict:
+    """
+    Format a JSON-RPC 2.0 success response.
+
+    Args:
+        req_id: The request ID from the incoming JSON-RPC message.
+        result (dict): The successful result payload to return.
+
+    Returns:
+        dict: A formatted JSON-RPC success response object.
+    """
     return {"jsonrpc": "2.0", "id": req_id, "result": result}
 
 def _today() -> str:
+    """
+    Get the current UTC date as a string in YYYY-MM-DD format.
+
+    Returns:
+        str: The current date.
+    """
     return datetime.utcnow().strftime("%Y-%m-%d")
 
 # ─── Tool Definitions ─────────────────────────────────────────────────────────
@@ -498,6 +530,15 @@ TOOLS = [
 # ─── Tool Handlers ────────────────────────────────────────────────────────────
 
 def handle_brand_perception_audit(args: dict) -> str:
+    """
+    Handle the 'brand_perception_audit' tool request.
+
+    Args:
+        args (dict): The arguments provided for the tool, containing 'brand_name', 'industry', and optionally 'website'.
+
+    Returns:
+        str: The generated LLM prompt for a brand perception audit.
+    """
     brand = args["brand_name"]
     industry = args["industry"]
     website = args.get("website", "not provided")
@@ -550,6 +591,15 @@ Then provide:
 
 
 def handle_citation_check(args: dict) -> str:
+    """
+    Handle the 'citation_check' tool request.
+
+    Args:
+        args (dict): The arguments provided for the tool, containing 'brand_name' and 'topics'.
+
+    Returns:
+        str: The generated LLM prompt asking the model to evaluate its likelihood of citing the brand.
+    """
     brand = args["brand_name"]
     topics = args["topics"]
     topic_list = "\n".join(f"{i+1}. **{t}**" for i, t in enumerate(topics))
@@ -591,6 +641,15 @@ When users ask AI about these topics, they trust AI's sources. If {brand} isn't 
 
 
 def handle_competitor_comparison(args: dict) -> str:
+    """
+    Handle the 'competitor_comparison' tool request.
+
+    Args:
+        args (dict): The arguments provided for the tool, containing 'brand_name', 'competitors', and 'category'.
+
+    Returns:
+        str: The generated LLM prompt to conduct a head-to-head comparison between the brand and its competitors.
+    """
     brand = args["brand_name"]
     competitors = args["competitors"]
     category = args["category"]
@@ -638,6 +697,15 @@ Compare how AI models perceive **{brand}** versus the following competitors in t
 
 
 def handle_entity_clarity_score(args: dict) -> str:
+    """
+    Handle the 'entity_clarity_score' tool request.
+
+    Args:
+        args (dict): The arguments provided for the tool, containing 'brand_name' and optionally 'tagline_or_description'.
+
+    Returns:
+        str: The generated LLM prompt to evaluate how clearly AI models resolve the brand's identity.
+    """
     brand = args["brand_name"]
     description = args.get("tagline_or_description")
     desc_block = f'\n**Brand\'s self-description:** "{description}"\n' if description else ""
@@ -694,6 +762,15 @@ Assess which of these you can answer about {brand}:
 
 
 def handle_geo_recommendations(args: dict) -> str:
+    """
+    Handle the 'geo_recommendations' tool request.
+
+    Args:
+        args (dict): The arguments provided for the tool, containing 'brand_name', 'service', and 'target_locations'.
+
+    Returns:
+        str: The generated LLM prompt to check whether a brand is recommended for a service within specific locations.
+    """
     brand = args["brand_name"]
     service = args["service"]
     locations = args["target_locations"]
@@ -743,6 +820,15 @@ The user should try these in ChatGPT, Claude, and Perplexity:
 
 
 def handle_prompt_vulnerability_scan(args: dict) -> str:
+    """
+    Handle the 'prompt_vulnerability_scan' tool request.
+
+    Args:
+        args (dict): The arguments provided for the tool, containing 'brand_name' and 'prompts'.
+
+    Returns:
+        str: The generated LLM prompt to scan provided prompts and identify how vulnerable the brand is to poor AI answers.
+    """
     brand = args["brand_name"]
     prompts = args["prompts"]
     prompt_list = "\n".join(f'{i+1}. "{p}"' for i, p in enumerate(prompts))
@@ -796,6 +882,15 @@ Then provide:
 
 
 def handle_sentiment_analysis(args: dict) -> str:
+    """
+    Handle the 'sentiment_analysis' tool request.
+
+    Args:
+        args (dict): The arguments provided for the tool, containing 'brand_name' and optionally 'aspects'.
+
+    Returns:
+        str: The generated LLM prompt that evaluates the typical sentiment and tone an AI uses when discussing the brand.
+    """
     brand = args["brand_name"]
     aspects = args.get("aspects", ["quality", "pricing", "customer service", "innovation", "reliability"])
     aspect_list = "\n".join(f"{i+1}. **{a}**" for i, a in enumerate(aspects))
@@ -849,6 +944,15 @@ AI learns sentiment from:
 
 
 def handle_content_strategy_generator(args: dict) -> str:
+    """
+    Handle the 'content_strategy_generator' tool request.
+
+    Args:
+        args (dict): The arguments provided for the tool, containing 'brand_name', 'industry', 'weak_areas', and optionally 'target_audience'.
+
+    Returns:
+        str: The generated LLM prompt that creates an actionable content strategy prioritized for AI visibility.
+    """
     brand = args["brand_name"]
     industry = args["industry"]
     weak_areas = args["weak_areas"]
@@ -902,6 +1006,15 @@ Then provide:
 
 
 def handle_competitor_gap_analysis(args: dict) -> str:
+    """
+    Handle the 'competitor_gap_analysis' tool request.
+
+    Args:
+        args (dict): The arguments provided for the tool, containing 'brand_name', 'competitors', 'topics', and 'industry'.
+
+    Returns:
+        str: The generated LLM prompt to analyze the gaps between the brand and its competitors across specific topics.
+    """
     brand = args["brand_name"]
     competitors = args["competitors"]
     topics = args["topics"]
@@ -955,6 +1068,15 @@ Then provide:
 
 
 def handle_content_audit_for_ai(args: dict) -> str:
+    """
+    Handle the 'content_audit_for_ai' tool request.
+
+    Args:
+        args (dict): The arguments provided for the tool, containing 'brand_name', 'content_urls', and 'target_topics'.
+
+    Returns:
+        str: The generated LLM prompt summarizing an AI-readability audit of multiple content URLs.
+    """
     brand = args["brand_name"]
     urls = args["content_urls"]
     topics = args["target_topics"]
@@ -1017,6 +1139,15 @@ Then provide:
 
 
 def handle_citation_outreach_targets(args: dict) -> str:
+    """
+    Handle the 'citation_outreach_targets' tool request.
+
+    Args:
+        args (dict): The arguments provided for the tool, containing 'brand_name', 'industry', 'topics', and optionally 'target_count'.
+
+    Returns:
+        str: The generated LLM prompt to identify external websites the brand should target for citations and backlinks.
+    """
     brand = args["brand_name"]
     industry = args["industry"]
     topics = args["topics"]
@@ -1076,6 +1207,15 @@ When authoritative {industry} sites mention or link to {brand}, AI models:
 
 
 def handle_ai_readiness_scorecard(args: dict) -> str:
+    """
+    Handle the 'ai_readiness_scorecard' tool request.
+
+    Args:
+        args (dict): The arguments provided for the tool, containing 'brand_name', 'industry', and optionally 'website', 'competitors', 'target_locations', and 'topics'.
+
+    Returns:
+        str: The generated LLM prompt to produce an all-encompassing AI readiness scorecard.
+    """
     brand = args["brand_name"]
     industry = args["industry"]
     website = args.get("website")
@@ -1174,6 +1314,15 @@ Based on findings, recommend which Newtation tools to run next:
 
 
 def handle_generate_audit_queries(args: dict) -> str:
+    """
+    Handle the 'generate_audit_queries' tool request.
+
+    Args:
+        args (dict): The arguments provided for the tool, containing 'brand_name', 'industry', and optionally 'focus_areas' and 'competitor_names'.
+
+    Returns:
+        str: The generated prompt string containing the structured query plan.
+    """
     brand = args["brand_name"]
     industry = args["industry"]
     areas = args.get("focus_areas", [])
@@ -1275,6 +1424,15 @@ Using the {len(queries)} generated queries above:
 
 
 def handle_hallucination_check(args: dict) -> str:
+    """
+    Handle the 'hallucination_check' tool request.
+
+    Args:
+        args (dict): The arguments provided for the tool, containing 'brand_name', 'ai_response', and optionally 'known_facts'.
+
+    Returns:
+        str: The generated LLM prompt guiding the LLM to verify claims from the AI-generated text.
+    """
     brand = args["brand_name"]
     response = args["ai_response"]
     facts = args.get("known_facts", [])
@@ -1342,6 +1500,15 @@ Then provide:
 
 
 def handle_schema_markup_generator(args: dict) -> str:
+    """
+    Handle the 'schema_markup_generator' tool request.
+
+    Args:
+        args (dict): The arguments provided for the tool, containing 'brand_name', 'url', 'description', and optionally 'type', 'founding_year', 'founders', and 'social_urls'.
+
+    Returns:
+        str: A generated string containing valid JSON-LD schema blocks.
+    """
     brand = args["brand_name"]
     url = args["url"]
     description = args["description"]
@@ -1505,6 +1672,19 @@ HANDLERS = {
 }
 
 def call_tool(name: str, args: dict) -> str:
+    """
+    Route a tool call to the appropriate handler function.
+
+    Args:
+        name (str): The name of the tool to invoke.
+        args (dict): The arguments to pass to the tool.
+
+    Returns:
+        str: The result of the tool execution.
+
+    Raises:
+        ValueError: If the tool name is unknown.
+    """
     handler = HANDLERS.get(name)
     if not handler:
         raise ValueError(f"Unknown tool: {name}")
@@ -1552,6 +1732,15 @@ PROMPTS = [
 ]
 
 def _prompt_full_brand_audit(args: dict) -> dict:
+    """
+    Handle the 'full_brand_audit' prompt request.
+
+    Args:
+        args (dict): The arguments provided for the prompt, containing 'brand_name', 'industry', and optionally 'website' and 'competitors'.
+
+    Returns:
+        dict: The formatted messages payload for the prompt.
+    """
     brand = args.get("brand_name", "")
     industry = args.get("industry", "")
     website = args.get("website", "")
@@ -1572,6 +1761,15 @@ def _prompt_full_brand_audit(args: dict) -> dict:
     return {"messages": [{"role": "user", "content": {"type": "text", "text": "\n".join(p for p in parts if p or p == "")}}]}
 
 def _prompt_quick_health_check(args: dict) -> dict:
+    """
+    Handle the 'quick_health_check' prompt request.
+
+    Args:
+        args (dict): The arguments provided for the prompt, containing 'brand_name' and 'industry'.
+
+    Returns:
+        dict: The formatted messages payload for the prompt.
+    """
     brand = args.get("brand_name", "")
     industry = args.get("industry", "")
     return {
@@ -1585,6 +1783,15 @@ def _prompt_quick_health_check(args: dict) -> dict:
     }
 
 def _prompt_competitive_deep_dive(args: dict) -> dict:
+    """
+    Handle the 'competitive_deep_dive' prompt request.
+
+    Args:
+        args (dict): The arguments provided for the prompt, containing 'brand_name', 'competitors', and 'industry'.
+
+    Returns:
+        dict: The formatted messages payload for the prompt.
+    """
     brand = args.get("brand_name", "")
     competitors = args.get("competitors", "")
     industry = args.get("industry", "")
@@ -1607,6 +1814,15 @@ def _prompt_competitive_deep_dive(args: dict) -> dict:
     }
 
 def _prompt_fix_my_ai_presence(args: dict) -> dict:
+    """
+    Handle the 'fix_my_ai_presence' prompt request.
+
+    Args:
+        args (dict): The arguments provided for the prompt, containing 'brand_name', 'url', and 'description'.
+
+    Returns:
+        dict: The formatted messages payload for the prompt.
+    """
     brand = args.get("brand_name", "")
     url = args.get("url", "")
     description = args.get("description", "")
@@ -1639,6 +1855,15 @@ PROMPT_HANDLERS = {
 # ─── MCP Message Router ────────────────────────────────────────────────────────
 
 def handle_message(msg: dict) -> dict | None:
+    """
+    Process an incoming JSON-RPC message and return an appropriate response, if any.
+
+    Args:
+        msg (dict): The incoming JSON-RPC payload.
+
+    Returns:
+        dict | None: The JSON-RPC response object, or None if the message was a notification.
+    """
     method = msg.get("method", "")
     req_id = msg.get("id")
 
@@ -1696,6 +1921,9 @@ def handle_message(msg: dict) -> dict | None:
 # ─── Main Loop ────────────────────────────────────────────────────────────────
 
 def main():
+    """
+    Start the standard input/output loop to process MCP protocol messages.
+    """
     for raw_line in sys.stdin:
         raw_line = raw_line.strip()
         if not raw_line:
