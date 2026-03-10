@@ -67,6 +67,14 @@ const OPEN_WORLD_ANNOTATIONS = {
   openWorldHint: true,
 } as const;
 
+/**
+ * Interface for the default handler expected by workers-oauth-provider.
+ * It must expose a fetch() method matching the standard Workers signature.
+ */
+interface OAuthHandler {
+  fetch(request: Request, env: Env, ctx: ExecutionContext): Response | Promise<Response>;
+}
+
 // Props passed through from the OAuth flow, available as this.props
 type Props = {
   login: string;
@@ -622,7 +630,7 @@ export class NewtationMCP extends McpAgent<Env, Record<string, never>, Props> {
 export default new OAuthProvider({
   apiRoute: "/mcp",
   apiHandler: NewtationMCP.serve("/mcp"),
-  defaultHandler: GitHubHandler as any,
+  defaultHandler: GitHubHandler as unknown as OAuthHandler,
   authorizeEndpoint: "/authorize",
   tokenEndpoint: "/token",
   clientRegistrationEndpoint: "/register",
