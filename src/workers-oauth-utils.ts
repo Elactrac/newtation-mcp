@@ -7,7 +7,17 @@
 
 import type { AuthRequest, ClientInfo } from "@cloudflare/workers-oauth-provider";
 
+/**
+ * Represents an error that occurs during the OAuth authorization process.
+ */
 export class OAuthError extends Error {
+  /**
+   * Constructs a new OAuthError instance.
+   *
+   * @param code - The short error code (e.g., 'invalid_request').
+   * @param description - A human-readable description of the error.
+   * @param statusCode - The HTTP status code to return (defaults to 400).
+   */
   constructor(
     public code: string,
     public description: string,
@@ -17,6 +27,11 @@ export class OAuthError extends Error {
     this.name = "OAuthError";
   }
 
+  /**
+   * Converts the OAuthError into an HTTP Response object.
+   *
+   * @returns A Response object with a JSON body representing the error.
+   */
   toResponse(): Response {
     return new Response(
       JSON.stringify({ error: this.code, error_description: this.description }),
@@ -27,6 +42,12 @@ export class OAuthError extends Error {
 
 // ── Text / URL sanitization ─────────────────────────────────────────────────
 
+/**
+ * Sanitizes text by replacing HTML characters with their corresponding entities.
+ *
+ * @param text - The raw text to sanitize.
+ * @returns The sanitized text safe for HTML injection.
+ */
 export function sanitizeText(text: string): string {
   return text
     .replace(/&/g, "&amp;")
@@ -36,6 +57,12 @@ export function sanitizeText(text: string): string {
     .replace(/'/g, "&#039;");
 }
 
+/**
+ * Sanitizes a URL to prevent XSS and ensure it uses an allowed scheme (http/https).
+ *
+ * @param url - The URL string to sanitize.
+ * @returns The sanitized URL or an empty string if validation fails.
+ */
 export function sanitizeUrl(url: string): string {
   const normalized = url.trim();
   if (normalized.length === 0) return "";
@@ -61,6 +88,11 @@ export function sanitizeUrl(url: string): string {
 
 // ── CSRF protection ─────────────────────────────────────────────────────────
 
+/**
+ * Generates a CSRF token and a Set-Cookie string for binding the token to the client.
+ *
+ * @returns An object containing the generated token and the Set-Cookie string.
+ */
 export function generateCSRFProtection(): { token: string; setCookie: string } {
   const csrfCookieName = "__Host-CSRF_TOKEN";
   const token = crypto.randomUUID();
@@ -68,6 +100,14 @@ export function generateCSRFProtection(): { token: string; setCookie: string } {
   return { token, setCookie };
 }
 
+/**
+ * Validates the CSRF token from the provided form data against the token found in the request cookies.
+ *
+ * @param formData - The FormData containing the `csrf_token` field.
+ * @param request - The incoming HTTP Request containing the CSRF cookie.
+ * @returns An object containing a Set-Cookie string to clear the CSRF cookie.
+ * @throws OAuthError if the CSRF token is missing or does not match.
+ */
 export function validateCSRFToken(formData: FormData, request: Request): { clearCookie: string } {
   const csrfCookieName = "__Host-CSRF_TOKEN";
   const tokenFromForm = formData.get("csrf_token");
@@ -93,6 +133,14 @@ export function validateCSRFToken(formData: FormData, request: Request): { clear
 
 // ── OAuth state management ──────────────────────────────────────────────────
 
+/**
+ * Creates and stores the OAuth state in a KV namespace.
+ *
+ * @param oauthReqInfo - The parsed OAuth authorization request information.
+ * @param kv - The KVNamespace instance used to store the state.
+ * @param stateTTL - The time-to-live for the state in seconds (defaults to 600).
+ * @returns An object containing the generated state token.
+ */
 export async function createOAuthState(
   oauthReqInfo: AuthRequest,
   kv: KVNamespace,
@@ -105,6 +153,12 @@ export async function createOAuthState(
   return { stateToken };
 }
 
+/**
+ * Creates a hashed session cookie binding for a given state token.
+ *
+ * @param stateToken - The state token to bind to the session.
+ * @returns An object containing the Set-Cookie string for the session binding.
+ */
 export async function bindStateToSession(stateToken: string): Promise<{ setCookie: string }> {
   const consentedStateCookieName = "__Host-CONSENTED_STATE";
   const encoder = new TextEncoder();
@@ -118,6 +172,14 @@ export async function bindStateToSession(stateToken: string): Promise<{ setCooki
   };
 }
 
+/**
+ * Validates the OAuth state from the request against the stored state in KV and the session cookie.
+ *
+ * @param request - The incoming HTTP Request containing the `state` query parameter and session cookie.
+ * @param kv - The KVNamespace instance used to retrieve the stored state.
+ * @returns An object containing the original OAuth authorization request info and a Set-Cookie string to clear the session.
+ * @throws OAuthError if the state is missing, invalid, expired, or mismatches the session binding.
+ */
 export async function validateOAuthState(
   request: Request,
   kv: KVNamespace,
@@ -176,6 +238,14 @@ export async function validateOAuthState(
 
 // ── Approved clients cookie management ──────────────────────────────────────
 
+/**
+ * Checks if a specific client has been previously approved by examining the signed cookie.
+ *
+ * @param request - The incoming HTTP Request containing the approved clients cookie.
+ * @param clientId - The client identifier to check.
+ * @param cookieSecret - The secret key used to verify the cookie's HMAC signature.
+ * @returns True if the client is approved, otherwise false.
+ */
 export async function isClientApproved(
   request: Request,
   clientId: string,
@@ -185,6 +255,14 @@ export async function isClientApproved(
   return approvedClients?.includes(clientId) ?? false;
 }
 
+/**
+ * Adds a client to the list of approved clients in a signed cookie.
+ *
+ * @param request - The incoming HTTP Request containing the current approved clients cookie (if any).
+ * @param clientId - The client identifier to approve.
+ * @param cookieSecret - The secret key used to sign the updated cookie.
+ * @returns The Set-Cookie string for the updated approved clients cookie.
+ */
 export async function addApprovedClient(
   request: Request,
   clientId: string,
@@ -205,14 +283,36 @@ export async function addApprovedClient(
 
 // ── Approval dialog ─────────────────────────────────────────────────────────
 
+/**
+ * Options required to render the OAuth approval dialog.
+ */
 export interface ApprovalDialogOptions {
+  /** Information about the requesting client. */
   client: ClientInfo | null;
-  server: { name: string; logo?: string; description?: string };
+  /** Information about the current server. */
+  server: {
+    /** The display name of the server. */
+    name: string;
+    /** An optional URL to the server's logo. */
+    logo?: string;
+    /** An optional description of the server. */
+    description?: string;
+  };
+  /** The state object to be encoded and submitted with the form. */
   state: Record<string, any>;
+  /** The generated CSRF token to be included as a hidden field. */
   csrfToken: string;
+  /** The Set-Cookie string(s) to be sent with the response. */
   setCookie: string;
 }
 
+/**
+ * Renders an HTML approval dialog for the user to grant access to an MCP Client.
+ *
+ * @param request - The incoming HTTP Request.
+ * @param options - The configuration options for the approval dialog.
+ * @returns A Response object containing the rendered HTML dialog.
+ */
 export function renderApprovalDialog(request: Request, options: ApprovalDialogOptions): Response {
   const { client, server, state, csrfToken, setCookie } = options;
   const encodedState = btoa(JSON.stringify(state));
@@ -281,6 +381,13 @@ export function renderApprovalDialog(request: Request, options: ApprovalDialogOp
 
 // ── Internal helpers ────────────────────────────────────────────────────────
 
+/**
+ * Retrieves the list of approved clients from the signed cookie.
+ *
+ * @param request - The incoming HTTP Request.
+ * @param cookieSecret - The secret key used to verify the cookie's signature.
+ * @returns An array of approved client IDs, or null if the cookie is invalid or missing.
+ */
 async function getApprovedClientsFromCookie(
   request: Request,
   cookieSecret: string,
@@ -313,6 +420,13 @@ async function getApprovedClientsFromCookie(
   }
 }
 
+/**
+ * Signs data using HMAC SHA-256.
+ *
+ * @param data - The data string to sign.
+ * @param secret - The secret key used for signing.
+ * @returns The resulting signature as a lowercase hex string.
+ */
 async function signData(data: string, secret: string): Promise<string> {
   const key = await importKey(secret);
   const enc = new TextEncoder();
@@ -322,6 +436,14 @@ async function signData(data: string, secret: string): Promise<string> {
     .join("");
 }
 
+/**
+ * Verifies an HMAC SHA-256 signature for a given string of data.
+ *
+ * @param signatureHex - The expected signature as a hex string.
+ * @param data - The original data string that was signed.
+ * @param secret - The secret key used to verify the signature.
+ * @returns True if the signature matches, false otherwise.
+ */
 async function verifySignature(signatureHex: string, data: string, secret: string): Promise<boolean> {
   const key = await importKey(secret);
   const enc = new TextEncoder();
@@ -335,6 +457,13 @@ async function verifySignature(signatureHex: string, data: string, secret: strin
   }
 }
 
+/**
+ * Imports a raw secret string as a CryptoKey for HMAC signing and verification.
+ *
+ * @param secret - The secret string to import.
+ * @returns The imported CryptoKey.
+ * @throws Error if the secret is empty.
+ */
 async function importKey(secret: string): Promise<CryptoKey> {
   if (!secret) throw new Error("cookieSecret is required for signing cookies");
   const enc = new TextEncoder();

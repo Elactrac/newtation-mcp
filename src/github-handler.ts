@@ -103,6 +103,14 @@ app.post("/authorize", async (c) => {
 
 // ── Helper: redirect to GitHub OAuth ────────────────────────────────────────
 
+/**
+ * Creates a redirect response pointing to the GitHub OAuth authorization page.
+ *
+ * @param request - The incoming HTTP Request.
+ * @param stateToken - The generated state token to include in the request.
+ * @param headers - Optional additional headers to include in the response (e.g., Set-Cookie).
+ * @returns A Response object that redirects the client to GitHub.
+ */
 async function redirectToGithub(
   request: Request,
   stateToken: string,

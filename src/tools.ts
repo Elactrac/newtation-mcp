@@ -34,6 +34,9 @@ const BT = "`";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
+/**
+ * Represents the results of fetching and analyzing a webpage.
+ */
 interface PageAnalysis {
   url: string;
   finalUrl: string;
@@ -60,6 +63,9 @@ interface PageAnalysis {
   error?: string;
 }
 
+/**
+ * Represents the result of performing DNS lookups on a domain.
+ */
 interface DNSResult {
   hasA: boolean;
   hasMX: boolean;
@@ -67,6 +73,9 @@ interface DNSResult {
   error?: string;
 }
 
+/**
+ * Represents an individual scoring metric within the AI readability assessment.
+ */
 interface ScoreItem {
   name: string;
   score: number;
@@ -74,6 +83,9 @@ interface ScoreItem {
   detail: string;
 }
 
+/**
+ * Represents the overall AI readability score breakdown for a webpage.
+ */
 interface ScoreBreakdown {
   total: number;
   max: number;
@@ -84,15 +96,32 @@ interface ScoreBreakdown {
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
+/**
+ * Gets the current date formatted as 'YYYY-MM-DD'.
+ *
+ * @returns The current date string.
+ */
 function today(): string {
   return new Date().toISOString().slice(0, 10);
 }
 
+/**
+ * Normalizes a given URL by trimming whitespace and prepending 'https://' if missing.
+ *
+ * @param raw - The raw URL string.
+ * @returns The normalized URL.
+ */
 function normalizeUrl(raw: string): string {
   const u = raw.trim();
   return /^https?:\/\//i.test(u) ? u : "https://" + u;
 }
 
+/**
+ * Extracts the domain name from a given URL string.
+ *
+ * @param url - The full URL string.
+ * @returns The extracted domain name.
+ */
 function getDomain(url: string): string {
   try {
     return new URL(normalizeUrl(url)).hostname;
@@ -101,7 +130,12 @@ function getDomain(url: string): string {
   }
 }
 
-/** Block private/internal IPs and non-HTTP schemes to prevent SSRF. */
+/**
+ * Checks if a URL is public. Blocks private/internal IPs and non-HTTP schemes to prevent SSRF.
+ *
+ * @param raw - The raw URL string to validate.
+ * @returns True if the URL points to a public, external HTTP/HTTPS resource, false otherwise.
+ */
 function isPublicUrl(raw: string): boolean {
   try {
     const u = new URL(normalizeUrl(raw));
@@ -136,11 +170,24 @@ function isPublicUrl(raw: string): boolean {
 
 // ── HTML Extraction ──────────────────────────────────────────────────────────
 
+/**
+ * Extracts the contents of the `<title>` tag from an HTML string.
+ *
+ * @param html - The HTML string to parse.
+ * @returns The extracted title, or an empty string if not found.
+ */
 function extractTitle(html: string): string {
   const m = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
   return m ? m[1].replace(/\s+/g, " ").trim() : "";
 }
 
+/**
+ * Extracts the content attribute of a specific `<meta>` tag based on its name or property.
+ *
+ * @param html - The HTML string to parse.
+ * @param nameOrProp - The value of the name or property attribute to look for.
+ * @returns The content value of the meta tag, or an empty string if not found.
+ */
 function extractMeta(html: string, nameOrProp: string): string {
   for (const attr of ["name", "property"]) {
     const r1 = new RegExp(
@@ -159,6 +206,12 @@ function extractMeta(html: string, nameOrProp: string): string {
   return "";
 }
 
+/**
+ * Extracts the href attribute from the canonical link tag if present.
+ *
+ * @param html - The HTML string to parse.
+ * @returns The canonical URL, or an empty string if not found.
+ */
 function extractCanonical(html: string): string {
   const m =
     html.match(/<link[^>]*rel=["']canonical["'][^>]*href=["']([^"']*)["']/i) ||
@@ -166,11 +219,23 @@ function extractCanonical(html: string): string {
   return m ? m[1] : "";
 }
 
+/**
+ * Extracts the lang attribute from the `<html>` tag.
+ *
+ * @param html - The HTML string to parse.
+ * @returns The language code, or an empty string if not found.
+ */
 function extractLang(html: string): string {
   const m = html.match(/<html[^>]*lang=["']([^"']*)["']/i);
   return m ? m[1] : "";
 }
 
+/**
+ * Extracts all JSON-LD structured data blocks found inside `<script type="application/ld+json">` tags.
+ *
+ * @param html - The HTML string to parse.
+ * @returns An array of parsed JSON-LD objects.
+ */
 function extractSchema(html: string): Record<string, unknown>[] {
   const out: Record<string, unknown>[] = [];
   const re =
@@ -188,6 +253,13 @@ function extractSchema(html: string): Record<string, unknown>[] {
   return out;
 }
 
+/**
+ * Extracts text content from specific heading tags (e.g., 'h1', 'h2').
+ *
+ * @param html - The HTML string to parse.
+ * @param tag - The heading tag to extract (e.g., 'h1', 'h2').
+ * @returns An array of inner text content found within the specified tags.
+ */
 function extractHeadings(html: string, tag: string): string[] {
   const out: string[] = [];
   const re = new RegExp("<" + tag + "[^>]*>([\\s\\S]*?)<\\/" + tag + ">", "gi");
@@ -199,6 +271,12 @@ function extractHeadings(html: string, tag: string): string[] {
   return out;
 }
 
+/**
+ * Counts the approximate number of words within the text content of the HTML body, excluding scripts and styles.
+ *
+ * @param html - The HTML string to analyze.
+ * @returns The total word count.
+ */
 function countWords(html: string): number {
   const body = html.match(/<body[^>]*>([\s\S]*)<\/body>/i)?.[1] ?? html;
   const text = body
@@ -210,6 +288,13 @@ function countWords(html: string): number {
   return text ? text.split(/\s+/).length : 0;
 }
 
+/**
+ * Counts the number of internal and external links present in the HTML.
+ *
+ * @param html - The HTML string to analyze.
+ * @param domain - The root domain used to determine if a link is internal or external.
+ * @returns A tuple containing [internalLinkCount, externalLinkCount].
+ */
 function countLinks(
   html: string,
   domain: string,
@@ -229,6 +314,12 @@ function countLinks(
 
 // ── Live Page Fetching (Cloudflare Workers fetch) ────────────────────────────
 
+/**
+ * Fetches a webpage and analyzes its HTML content, metadata, and structured data.
+ *
+ * @param rawUrl - The URL of the webpage to fetch.
+ * @returns A promise that resolves to a PageAnalysis object containing the extracted insights.
+ */
 async function fetchPage(rawUrl: string): Promise<PageAnalysis> {
   const url = normalizeUrl(rawUrl);
   const domain = getDomain(url);
@@ -310,6 +401,13 @@ async function fetchPage(rawUrl: string): Promise<PageAnalysis> {
 
 // ── DNS via Cloudflare DNS-over-HTTPS ────────────────────────────────────────
 
+/**
+ * Performs a DNS lookup via Cloudflare's DNS-over-HTTPS API.
+ * Retrieves A, MX, and TXT records for the specified domain.
+ *
+ * @param domain - The domain to look up.
+ * @returns A promise that resolves to a DNSResult object.
+ */
 async function dnsLookup(domain: string): Promise<DNSResult> {
   const result: DNSResult = { hasA: false, hasMX: false, txtRecords: [] };
   try {
@@ -346,6 +444,13 @@ async function dnsLookup(domain: string): Promise<DNSResult> {
 
 // ── AI-Readability Scoring ───────────────────────────────────────────────────
 
+/**
+ * Scores a webpage's AI readability based on extracted signals such as headings, schema, and meta tags.
+ *
+ * @param p - The PageAnalysis object containing extracted webpage data.
+ * @param brand - The name of the brand to check for in titles and descriptions.
+ * @returns A ScoreBreakdown object detailing points awarded and overall grade.
+ */
 function scoreAIReadability(
   p: PageAnalysis,
   brand: string,
@@ -492,6 +597,12 @@ function scoreAIReadability(
 
 // ── Formatting ───────────────────────────────────────────────────────────────
 
+/**
+ * Formats a PageAnalysis result into a Markdown-friendly string.
+ *
+ * @param p - The PageAnalysis result to format.
+ * @returns A formatted string summary of the page analysis.
+ */
 function fmtPage(p: PageAnalysis): string {
   if (p.error) return "**" + p.url + "** — Fetch failed: " + p.error;
   const lines = [
@@ -539,6 +650,12 @@ function fmtPage(p: PageAnalysis): string {
   return lines.join("\n");
 }
 
+/**
+ * Formats a ScoreBreakdown object into a Markdown table.
+ *
+ * @param s - The ScoreBreakdown to format.
+ * @returns A formatted Markdown table representing the scores.
+ */
 function fmtScoreTable(s: ScoreBreakdown): string {
   const rows = s.items.map(
     (i) => "| " + i.name + " | " + i.score + "/" + i.max + " | " + i.detail + " |",
@@ -559,6 +676,13 @@ function fmtScoreTable(s: ScoreBreakdown): string {
   ].join("\n");
 }
 
+/**
+ * Formats a DNSResult into a Markdown summary string.
+ *
+ * @param d - The DNSResult to format.
+ * @param domain - The domain associated with the DNS results.
+ * @returns A formatted string summary of the DNS records.
+ */
 function fmtDNS(d: DNSResult, domain: string): string {
   if (d.error) return "DNS lookup failed for " + domain + ": " + d.error;
   const spf = d.txtRecords.some((r) => r.includes("v=spf"));
@@ -581,6 +705,13 @@ function fmtDNS(d: DNSResult, domain: string): string {
   ].join("\n");
 }
 
+/**
+ * Identifies the top "quick win" optimizations from the score items.
+ * Prioritizes areas where the page scored poorly relative to the maximum possible points.
+ *
+ * @param items - The array of ScoreItems to analyze.
+ * @returns A formatted string listing the top quick win recommendations.
+ */
 function quickWins(items: ScoreItem[]): string {
   const gaps = items
     .filter((i) => i.score < i.max * 0.5)
@@ -607,6 +738,16 @@ function quickWins(items: ScoreItem[]): string {
 // LIVE ANALYSIS TOOLS — fetch real pages, parse HTML, compute scores
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
+/**
+ * Generates an LLM prompt to conduct a brand perception audit.
+ * Fetches the live website if a URL is provided to append technical context.
+ *
+ * @param args - The arguments for the tool.
+ * @param args.brand_name - The name of the brand.
+ * @param args.industry - The industry or category the brand operates in.
+ * @param args.website - The brand's website URL for live fetching (optional).
+ * @returns A promise resolving to the final audit prompt for the LLM.
+ */
 export async function brandPerceptionAudit(args: {
   brand_name: string;
   industry: string;
@@ -685,6 +826,16 @@ export async function brandPerceptionAudit(args: {
   );
 }
 
+/**
+ * Generates an LLM prompt to evaluate a brand's entity clarity.
+ * Evaluates how clearly AI models resolve the brand's identity.
+ *
+ * @param args - The arguments for the tool.
+ * @param args.brand_name - The name of the brand.
+ * @param args.tagline_or_description - The brand's official description or tagline (optional).
+ * @param args.website - The brand's website URL for checking schema/entity signals (optional).
+ * @returns A promise resolving to the prompt string.
+ */
 export async function entityClarityScore(args: {
   brand_name: string;
   tagline_or_description?: string;
@@ -797,6 +948,16 @@ export async function entityClarityScore(args: {
   );
 }
 
+/**
+ * Generates an LLM prompt summarizing an AI-readability audit of multiple content URLs.
+ * Fetches the provided URLs concurrently to parse their HTML structure.
+ *
+ * @param args - The arguments for the tool.
+ * @param args.brand_name - The name of the brand.
+ * @param args.content_urls - An array of URLs to audit.
+ * @param args.target_topics - The topics these URLs intend to cover.
+ * @returns A promise resolving to the prompt string encompassing page grades and overall issues.
+ */
 export async function contentAuditForAI(args: {
   brand_name: string;
   content_urls: string[];
@@ -932,6 +1093,19 @@ export async function contentAuditForAI(args: {
   );
 }
 
+/**
+ * Generates an LLM prompt to produce an all-encompassing AI readiness scorecard.
+ * Includes data from a live site fetch if a URL is supplied.
+ *
+ * @param args - The arguments for the tool.
+ * @param args.brand_name - The name of the brand.
+ * @param args.industry - The brand's industry.
+ * @param args.website - The brand's website URL (optional).
+ * @param args.competitors - List of competitor names (optional).
+ * @param args.target_locations - List of geographical target markets (optional).
+ * @param args.topics - Key subjects for citation checking (optional).
+ * @returns A promise resolving to the prompt string for the LLM.
+ */
 export async function aiReadinessScorecard(args: {
   brand_name: string;
   industry: string;
@@ -1051,6 +1225,16 @@ export async function aiReadinessScorecard(args: {
   );
 }
 
+/**
+ * Generates an LLM prompt to fact-check an AI-generated response against known facts or a live website.
+ *
+ * @param args - The arguments for the tool.
+ * @param args.brand_name - The name of the brand.
+ * @param args.ai_response - The raw, potentially hallucinated AI response text to verify.
+ * @param args.known_facts - A list of verified true facts about the brand (optional).
+ * @param args.website - A URL to fetch live to extract ground truth (optional).
+ * @returns A promise resolving to the prompt string guiding the LLM to verify claims.
+ */
 export async function hallucinationCheck(args: {
   brand_name: string;
   ai_response: string;
@@ -1150,6 +1334,20 @@ export async function hallucinationCheck(args: {
   );
 }
 
+/**
+ * Generates valid JSON-LD schema markup for a webpage.
+ * Fetches the URL to identify existing schemas and creates what's missing (Organization, WebSite, BreadcrumbList).
+ *
+ * @param args - The arguments for the tool.
+ * @param args.brand_name - The name of the brand.
+ * @param args.url - The webpage URL.
+ * @param args.description - A short description of the brand.
+ * @param args.type - The specific schema type, e.g., 'Organization' or 'LocalBusiness' (optional).
+ * @param args.founding_year - The year the brand was founded (optional).
+ * @param args.founders - An array of founder names (optional).
+ * @param args.social_urls - An array of URLs for the brand's social profiles (optional).
+ * @returns A promise resolving to a string containing the generated JSON-LD blocks.
+ */
 export async function schemaMarkupGenerator(args: {
   brand_name: string;
   url: string;
@@ -1346,6 +1544,14 @@ const WEB_SEARCH_INSTRUCTION =
   "Combine what you find from web search with your own knowledge to produce the " +
   "most accurate, evidence-backed audit possible. Cite your sources with URLs.";
 
+/**
+ * Generates an LLM prompt that asks the model to evaluate its likelihood of citing a brand.
+ *
+ * @param args - The arguments for the tool.
+ * @param args.brand_name - The name of the brand.
+ * @param args.topics - An array of topics for which the brand wants to be cited.
+ * @returns The generated prompt string.
+ */
 export function citationCheck(args: {
   brand_name: string;
   topics: string[];
@@ -1388,6 +1594,15 @@ export function citationCheck(args: {
   );
 }
 
+/**
+ * Generates an LLM prompt to conduct a head-to-head comparison between the brand and its competitors.
+ *
+ * @param args - The arguments for the tool.
+ * @param args.brand_name - The brand's name.
+ * @param args.competitors - An array of competitor brand names.
+ * @param args.category - The industry category to compare them in.
+ * @returns The generated prompt string.
+ */
 export function competitorComparison(args: {
   brand_name: string;
   competitors: string[];
@@ -1456,6 +1671,15 @@ export function competitorComparison(args: {
   );
 }
 
+/**
+ * Generates an LLM prompt to check whether a brand is recommended for a service within specific locations.
+ *
+ * @param args - The arguments for the tool.
+ * @param args.brand_name - The brand's name.
+ * @param args.service - The specific service provided.
+ * @param args.target_locations - Target cities or regions to test.
+ * @returns The generated prompt string.
+ */
 export function geoRecommendations(args: {
   brand_name: string;
   service: string;
@@ -1492,6 +1716,14 @@ export function geoRecommendations(args: {
   );
 }
 
+/**
+ * Generates an LLM prompt to scan provided prompts and identify how vulnerable the brand is to poor AI answers.
+ *
+ * @param args - The arguments for the tool.
+ * @param args.brand_name - The brand's name.
+ * @param args.prompts - An array of specific user prompts to test.
+ * @returns The generated prompt string.
+ */
 export function promptVulnerabilityScan(args: {
   brand_name: string;
   prompts: string[];
@@ -1565,6 +1797,14 @@ export function promptVulnerabilityScan(args: {
   );
 }
 
+/**
+ * Generates an LLM prompt that evaluates the typical sentiment and tone an AI uses when discussing the brand.
+ *
+ * @param args - The arguments for the tool.
+ * @param args.brand_name - The brand's name.
+ * @param args.aspects - Specific aspects of the brand to analyze, such as pricing or customer service (optional).
+ * @returns The generated prompt string.
+ */
 export function sentimentAnalysis(args: {
   brand_name: string;
   aspects?: string[];
@@ -1604,6 +1844,16 @@ export function sentimentAnalysis(args: {
   );
 }
 
+/**
+ * Generates an LLM prompt that creates an actionable content strategy prioritized for AI visibility.
+ *
+ * @param args - The arguments for the tool.
+ * @param args.brand_name - The brand's name.
+ * @param args.industry - The industry the brand operates within.
+ * @param args.weak_areas - Specific topics or domains where the brand's AI visibility is low.
+ * @param args.target_audience - The specific demographic or user group the content should target (optional).
+ * @returns The generated prompt string.
+ */
 export function contentStrategyGenerator(args: {
   brand_name: string;
   industry: string;
@@ -1663,6 +1913,16 @@ export function contentStrategyGenerator(args: {
   );
 }
 
+/**
+ * Generates an LLM prompt to analyze the gaps between the brand and its competitors across specific topics.
+ *
+ * @param args - The arguments for the tool.
+ * @param args.brand_name - The brand's name.
+ * @param args.competitors - An array of competitor brand names.
+ * @param args.topics - An array of topics to measure the gap on.
+ * @param args.industry - The overarching industry.
+ * @returns The generated prompt string.
+ */
 export function competitorGapAnalysis(args: {
   brand_name: string;
   competitors: string[];
@@ -1721,6 +1981,16 @@ export function competitorGapAnalysis(args: {
   );
 }
 
+/**
+ * Generates an LLM prompt to identify external websites the brand should target for citations and backlinks.
+ *
+ * @param args - The arguments for the tool.
+ * @param args.brand_name - The brand's name.
+ * @param args.industry - The industry the brand operates within.
+ * @param args.topics - Topics the brand wishes to be associated with.
+ * @param args.target_count - The number of outreach targets to generate (optional).
+ * @returns The generated prompt string.
+ */
 export function citationOutreachTargets(args: {
   brand_name: string;
   industry: string;
@@ -1773,6 +2043,16 @@ export function citationOutreachTargets(args: {
 // ALGORITHMIC TOOLS — real computed output
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
+/**
+ * Generates a list of test queries categorized by intent (Discovery, Comparison, etc.) to assess AI visibility.
+ *
+ * @param args - The arguments for the tool.
+ * @param args.brand_name - The brand's name.
+ * @param args.industry - The industry the brand operates within.
+ * @param args.focus_areas - Specific niche topics or service lines to include in queries (optional).
+ * @param args.competitor_names - Names of competitors to include in comparative queries (optional).
+ * @returns The generated prompt string containing the structured query plan.
+ */
 export function generateAuditQueries(args: {
   brand_name: string;
   industry: string;

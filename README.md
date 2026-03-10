@@ -250,6 +250,31 @@ See our full privacy policy at: [https://newtationco.app/privacy](https://newtat
 
 ---
 
+## Architecture Overview
+
+Newtation operates using a dual-server architecture:
+
+1. **Remote MCP Server (Cloudflare Workers)**: Found in the `src/` directory. Written in TypeScript using Hono and `@cloudflare/workers-oauth-provider`. It provides tools through the Model Context Protocol (MCP) and handles GitHub OAuth authentication directly.
+2. **Local Python Server (`server.py`)**: A standalone stdio MCP server for local use (e.g., via Claude Code). This version requires no external authentication and interacts locally through standard input/output.
+
+All tools act as **read-only** functions. Some perform real-time DNS checks and webpage scraping (using internal functions like `fetchPage`), while others rely purely on synthesizing LLM knowledge with generated context.
+
+---
+
+## Contributing
+
+We welcome contributions from the community! If you're looking to help improve Newtation MCP:
+
+1. **Fork the repository**
+2. **Create a branch** for your feature or bug fix.
+3. **Follow the code style** (Prettier, TypeScript strict mode, JSDoc docstrings for public interfaces).
+4. **Test your changes** locally via Claude Code before submitting a PR.
+5. **Open a Pull Request** with a detailed description of your changes.
+
+Make sure to read the [Self-Hosting](#self-hosting) section to learn how to run the project locally.
+
+---
+
 ## Support
 
 - **Email:** support@newtationco.app
