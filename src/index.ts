@@ -35,6 +35,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { McpAgent } from "agents/mcp";
 import { z } from "zod";
 import { GitHubHandler } from "./github-handler";
+import marketingSkills from "./marketing-skills.json";
 import {
   aiReadinessScorecard,
   brandPerceptionAudit,
@@ -614,6 +615,40 @@ export class NewtationMCP extends McpAgent<Env, Record<string, never>, Props> {
         ],
       }),
     );
+
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    // Marketing Skills (Prompts)
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    
+    for (const skill of marketingSkills) {
+      this.server.prompt(
+        `marketing_skill_${skill.id.replace(/-/g, "_")}`,
+        skill.description,
+        {
+          task_details: z.string().optional().describe("Optional context or details about the marketing task"),
+        },
+        async ({ task_details }) => {
+          let promptText = skill.content;
+          if (task_details) {
+            promptText += `\n\n## Task Details\n${task_details}\n\nPlease apply this skill to the task above.`;
+          } else {
+            promptText += `\n\nPlease apply this skill to help me with my marketing task.`;
+          }
+          
+          return {
+            messages: [
+              {
+                role: "user" as const,
+                content: {
+                  type: "text" as const,
+                  text: promptText,
+                },
+              },
+            ],
+          };
+        }
+      );
+    }
   }
 }
 
