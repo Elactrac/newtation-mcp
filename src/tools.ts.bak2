@@ -1,0 +1,1082 @@
+/**
+ * Newtation AI Presence Tools
+ *
+ * 15 brand auditing tools for the Newtation MCP Server.
+ *
+ * Tools combine two approaches:
+ * 1. Structured analysis frameworks the consuming LLM fills in using its
+ *    actual training-data knowledge (the LLM IS the data source).
+ * 2. Computed artifacts: real query sets, JSON-LD code, and verification
+ *    matrices that the tool generates algorithmically.
+ *
+ * Core Audit (5):
+ *   - brandPerceptionAudit       : Overall AI perception snapshot
+ *   - citationCheck              : Topic-by-topic citation status
+ *   - competitorComparison       : You vs competitors in AI
+ *   - entityClarityScore         : Does AI know what you are?
+ *   - geoRecommendations         : Location-based AI visibility
+ *
+ * Diagnostics (3):
+ *   - promptVulnerabilityScan    : Find prompts where AI gives wrong/weak answers
+ *   - sentimentAnalysis          : Likely tone when AI discusses your brand
+ *   - hallucinationCheck         : Verify AI claims about your brand
+ *
+ * Strategy & Output (5):
+ *   - contentStrategyGenerator   : Prioritized content plan from weak areas
+ *   - competitorGapAnalysis      : Topics where competitors have stronger AI visibility
+ *   - contentAuditForAI          : Scores existing content for AI discoverability
+ *   - citationOutreachTargets    : High-authority sites to target for backlinks
+ *   - schemaMarkupGenerator      : Generate paste-ready AI-optimized JSON-LD
+ *
+ * Generators (1):
+ *   - generateAuditQueries       : Auto-generate categorized visibility test queries
+ *
+ * Summary (1):
+ *   - aiReadinessScorecard       : Full composite score across all dimensions
+ */
+
+function today(): string {
+  return new Date().toISOString().slice(0, 10);
+}
+
+// ── Tool Handlers ────────────────────────────────────────────────────────────
+
+export function brandPerceptionAudit(args: {
+  brand_name: string;
+  industry: string;
+  website?: string;
+}): string {
+  const { brand_name: brand, industry, website = "not provided" } = args;
+
+  return `# Brand Perception Audit — ${brand}
+*Generated ${today()} · Newtation MCP*
+
+## Your Task
+Analyze how AI models (including yourself) currently perceive **${brand}** in the **${industry}** space${website !== "not provided" ? ` (${website})` : ""}. Use your actual training data and knowledge — do not fabricate information. If you lack information, say so honestly.
+
+## Evaluation Dimensions
+
+### 1. Brand Recognition
+- Would you include ${brand} in a "top ${industry} companies" list? Why or why not?
+- How would you describe ${brand} to someone who has never heard of it?
+- Is your description specific to ${brand}, or could it describe any ${industry} company?
+
+### 2. Authority & Confidence
+- Do you have enough information to speak confidently about ${brand}?
+- Would you recommend ${brand} to a user asking for ${industry} solutions?
+- What specific evidence (publications, reviews, case studies) do you recall?
+
+### 3. Trust Signals
+- Has ${brand} been mentioned in reputable industry publications?
+- Does ${brand} have a Wikipedia page, Crunchbase profile, or notable press coverage?
+- Are there consistent brand signals across multiple sources?
+
+### 4. Differentiation
+- Can you articulate what makes ${brand} different from competitors?
+- Does ${brand} have a unique methodology, product, or approach you can name?
+- Or is your knowledge of ${brand} generic and interchangeable with others?
+
+## Recommended Test Prompts
+The user should test these prompts in ChatGPT, Perplexity, and Gemini:
+1. "Who are the best ${industry} companies?"
+2. "What do people say about ${brand}?"
+3. "Is ${brand} a good choice for [their core service]?"
+
+## Response Format
+For each dimension, provide:
+- Your honest assessment: **Strong** / **Moderate** / **Weak** / **No Data**
+- Supporting evidence or reasoning
+- What's missing that would strengthen the assessment
+
+Then provide:
+- An overall perception summary
+- 3-5 specific, prioritized recommendations
+- Which Newtation tool to run next based on findings`;
+}
+
+export function citationCheck(args: {
+  brand_name: string;
+  topics: string[];
+}): string {
+  const { brand_name: brand, topics } = args;
+  const topicList = topics.map((t, i) => `${i + 1}. **${t}**`).join("\n");
+
+  return `# Citation Check — ${brand}
+*Generated ${today()} · Newtation MCP*
+
+## Your Task
+For each topic below, assess whether you (as an AI model) would cite **${brand}** as a credible source or authority. Be honest — if you wouldn't cite them, say so and explain why.
+
+## Topics to Evaluate
+${topicList}
+
+## For Each Topic, Analyze:
+
+### Citation Likelihood
+- Would you mention ${brand} when answering a question about this topic?
+- Would you cite ${brand} as a primary source, a supporting reference, or not at all?
+- What other brands/sources would you cite instead, and why?
+
+### Content Gaps
+- What content would ${brand} need to publish to become citable for this topic?
+- What type of content gets cited by AI? (Original research, comprehensive guides, unique frameworks)
+- Who currently "owns" this topic in AI responses?
+
+## Response Format
+Create a table:
+| Topic | Citation Status | Would Cite? | Current Leader | What ${brand} Needs |
+|-------|----------------|-------------|----------------|---------------------|
+
+Then provide:
+- Overall citation rate (how many topics you'd cite ${brand} for)
+- Priority actions for the weakest topics
+- Content types most likely to earn citations
+- Timeline expectations (AI models update knowledge gradually)
+
+## Why This Matters
+When users ask AI about these topics, they trust AI's sources. If ${brand} isn't being cited, they're invisible at the exact moment a potential customer is seeking a recommendation.`;
+}
+
+export function competitorComparison(args: {
+  brand_name: string;
+  competitors: string[];
+  category: string;
+}): string {
+  const { brand_name: brand, competitors, category } = args;
+  const compList = competitors.map((c, i) => `${i + 1}. ${c}`).join("\n");
+  const firstComp = competitors[0] ?? "competitor";
+
+  return `# Competitor AI Visibility Comparison — ${category}
+*Generated ${today()} · Newtation MCP*
+
+## Your Task
+Compare how AI models perceive **${brand}** versus the following competitors in the **${category}** space. Use your actual knowledge — rate each brand honestly.
+
+## Brands to Compare
+- **${brand}** (the client)
+${compList}
+
+## Evaluation Criteria (Apply to Each Brand)
+
+### 1. AI Mindshare
+- Which brand comes to mind first when someone asks about ${category}?
+- Which brand would you recommend most confidently?
+- Which brand do you know the most about?
+
+### 2. Content Authority
+- Which brand has the strongest content presence you've encountered in training data?
+- Which brand publishes the most authoritative, comprehensive content on ${category}?
+- Which brand's content would you cite as a source?
+
+### 3. Brand Clarity
+- Which brand has the clearest identity — you know exactly what they do and for whom?
+- Which brand is most differentiated from the others?
+- Which brand's value proposition can you articulate most precisely?
+
+### 4. Reputation & Sentiment
+- Which brand has the most positive overall sentiment?
+- Which brand has the strongest trust signals (reviews, press, awards)?
+- Are there any negative signals for any brand?
+
+## Response Format
+1. Create a comparison table rating each brand across the 4 dimensions (Strong/Moderate/Weak/Unknown)
+2. Identify the overall AI visibility leader and explain why
+3. Assess the gap between ${brand} and the leader
+4. Provide specific actions ${brand} should take to close any gaps
+5. Suggest 2-3 test prompts (e.g., "Compare ${brand} vs ${firstComp} for ${category}")`;
+}
+
+export function entityClarityScore(args: {
+  brand_name: string;
+  tagline_or_description?: string;
+}): string {
+  const { brand_name: brand, tagline_or_description: description } = args;
+
+  return `# Entity Clarity Analysis — ${brand}
+*Generated ${today()} · Newtation MCP*
+
+## Your Task
+Evaluate how clearly AI models understand what **${brand}** is, what it does, and who it serves. Entity clarity determines whether AI can accurately describe and recommend a brand.
+${description ? `\n**Brand's self-description:** "${description}"\n` : ""}
+## Evaluation Framework
+
+### 1. Identity Resolution
+- Do you know what ${brand} is? (Company, product, person, concept?)
+- Could ${brand} be confused with another entity of the same name?
+- How many different "${brand}" entities exist in your knowledge?
+
+### 2. Description Accuracy
+- Describe ${brand} in 2-3 sentences using only what you know.
+${description ? `- Compare your description to their self-description above — what's missing or wrong?` : "- How confident are you in your description?"}
+- Would your description help a user decide whether to use ${brand}?
+
+### 3. Attribute Completeness
+Assess which of these you can answer about ${brand}:
+- [ ] What does ${brand} do? (core offering)
+- [ ] Who does ${brand} serve? (target market)
+- [ ] Where is ${brand} based? (location)
+- [ ] When was ${brand} founded? (age/maturity)
+- [ ] What makes ${brand} unique? (differentiators)
+- [ ] Who founded or leads ${brand}? (leadership)
+- [ ] What is ${brand}'s size/scale? (employees, revenue, customers)
+
+### 4. Consistency
+- Would you describe ${brand} the same way regardless of how the question is phrased?
+- Or does your answer vary depending on context?
+
+## Response Format
+1. Rate entity clarity: **Clear** / **Partially Clear** / **Unclear** / **Unknown**
+2. Provide your own description of ${brand} (be honest about uncertainty)
+3. List which attributes you can and cannot answer
+4. Identify the biggest clarity gap
+5. Provide an entity strengthening checklist:
+   - Consistent name usage across web properties
+   - Complete About page with explicit entity attributes
+   - Organization schema markup with @id, name, url, description
+   - Wikipedia/Wikidata entry (if eligible)
+   - Complete Crunchbase, LinkedIn, Google Business profiles
+   - Press mentions using consistent brand language`;
+}
+
+export function geoRecommendations(args: {
+  brand_name: string;
+  service: string;
+  target_locations: string[];
+}): string {
+  const { brand_name: brand, service, target_locations: locations } = args;
+  const locList = locations.map((l, i) => `${i + 1}. ${l}`).join("\n");
+
+  return `# Geographic AI Recommendation Audit — ${brand}
+*Generated ${today()} · Newtation MCP*
+
+## Your Task
+For each target location, assess whether you would recommend **${brand}** when a user asks "Who provides the best ${service} in [location]?" Be honest about what you know.
+
+## Service: ${service}
+## Target Locations
+${locList}
+
+## For Each Location, Evaluate:
+
+### Recommendation Likelihood
+- Would you include ${brand} in your response for "${service} in [location]"?
+- What brands would you recommend instead? Why?
+- Do you have any evidence of ${brand} operating in this location?
+
+### Geographic Signal Strength
+- Has ${brand} published location-specific content for this area?
+- Are there local reviews, case studies, or press mentions connecting ${brand} to this location?
+- Does ${brand} have a physical presence (office, Google Business Profile) in this location?
+
+## Response Format
+Create a table:
+| Location | Would Recommend? | Confidence | Why/Why Not | Top Alternatives |
+|----------|-----------------|------------|-------------|-----------------|
+
+Then provide:
+- Overall geographic coverage assessment
+- Locations with weakest presence
+- Priority actions to build geographic AI presence:
+  1. Location-specific landing pages with real local content
+  2. Local case studies mentioning both the location and ${brand}
+  3. Regional press coverage in local business publications
+  4. Google Business Profile optimization
+  5. Location-tagged testimonials
+
+## Test Prompts
+The user should try these in ChatGPT, Claude, and Perplexity:
+${locations.map((l) => `- "Who provides the best ${service} in ${l}?"`).join("\n")}`;
+}
+
+// ── Diagnostics ──────────────────────────────────────────────────────────────
+
+export function promptVulnerabilityScan(args: {
+  brand_name: string;
+  prompts: string[];
+}): string {
+  const { brand_name: brand, prompts } = args;
+  const promptList = prompts.map((p, i) => `${i + 1}. "${p}"`).join("\n");
+
+  return `# Prompt Vulnerability Scan — ${brand}
+*Generated ${today()} · Newtation MCP*
+
+## Your Task
+For each prompt below, predict how AI models (including yourself) would actually respond. Identify where ${brand} is at risk of being misrepresented, omitted, or outshone by competitors.
+
+## Prompts to Test
+${promptList}
+
+## For Each Prompt, Analyze:
+
+### 1. Your Actual Response
+- How would you answer this prompt right now?
+- Would ${brand} appear in your response? In what position?
+- What tone would you use — confident, hedged, or uncertain?
+
+### 2. Risk Assessment
+Rate each prompt:
+- **Low Risk**: AI responds accurately and favorably for ${brand}
+- **Medium Risk**: AI gives a generic or hedged answer; ${brand} may be mentioned but not prominently
+- **High Risk**: AI omits ${brand} or describes it vaguely
+- **Critical Risk**: AI gives incorrect information or attributes ${brand}'s work to a competitor
+
+### 3. Root Cause
+For medium+ risk prompts, identify why:
+- Insufficient content on this topic?
+- Stronger competitor signals?
+- Ambiguous or inconsistent brand messaging?
+- The question targets an area ${brand} hasn't addressed publicly?
+
+## Response Format
+Create a table:
+| Prompt | Risk Level | Would Mention ${brand}? | Issue | Recommended Fix |
+|--------|-----------|------------------------|-------|----------------|
+
+Then provide:
+- Summary: X critical, Y high, Z medium, W low risk prompts
+- Priority fixes for critical/high-risk prompts
+- Content recommendations to address each vulnerability
+- Additional prompts the user should test (ones they may not have thought of)
+
+## How to Fix Vulnerabilities
+1. Write content that directly answers each high-risk prompt
+2. Match the exact phrasing users would use
+3. Earn citations from authoritative sources
+4. Re-test in 30 days to measure improvement`;
+}
+
+export function sentimentAnalysis(args: {
+  brand_name: string;
+  aspects?: string[];
+}): string {
+  const { brand_name: brand, aspects = ["quality", "pricing", "customer service", "innovation", "reliability"] } = args;
+  const aspectList = aspects.map((a, i) => `${i + 1}. **${a}**`).join("\n");
+
+  return `# AI Sentiment Analysis — ${brand}
+*Generated ${today()} · Newtation MCP*
+
+## Your Task
+Analyze the likely sentiment and tone when AI models discuss **${brand}** across the following aspects. Base this on your actual training data knowledge — reviews, press coverage, social mentions, and content you've encountered.
+
+## Aspects to Analyze
+${aspectList}
+
+## For Each Aspect, Evaluate:
+
+### Sentiment
+Rate the likely AI sentiment:
+- **Very Positive**: AI speaks confidently and favorably
+- **Positive**: AI is generally favorable with minor caveats
+- **Neutral**: AI mentions without strong opinion
+- **Cautious**: AI hedges or qualifies statements
+- **Negative**: AI has learned negative associations
+- **No Data**: Insufficient information to assess
+
+### Evidence
+- What sources inform your sentiment assessment? (Reviews, press, comparisons, social media)
+- Is the sentiment based on strong signals or sparse data?
+- Has the sentiment likely changed over time?
+
+## Response Format
+Create a table:
+| Aspect | Sentiment | Confidence | Key Evidence |
+|--------|-----------|------------|-------------|
+
+Then provide:
+- Overall sentiment summary
+- Strongest and weakest aspects
+- Where sentiment is based on sparse vs. strong data
+- Specific actions to improve negative/neutral sentiment:
+  1. Publish case studies addressing weak aspects
+  2. Earn reviews and testimonials
+  3. Issue corrections for outdated negative information
+  4. Repeat strongest messages consistently across all channels
+
+## How AI Forms Sentiment
+AI learns sentiment from:
+- Customer review patterns (G2, Trustpilot, Google)
+- Press coverage tone and framing
+- Social media mentions and discussions
+- Comparison content positioning`;
+}
+
+// ── Strategy & Output ────────────────────────────────────────────────────────
+
+export function contentStrategyGenerator(args: {
+  brand_name: string;
+  industry: string;
+  weak_areas: string[];
+  target_audience?: string;
+}): string {
+  const { brand_name: brand, industry, weak_areas: weakAreas, target_audience: audience = "decision-makers in your target market" } = args;
+  const areaList = weakAreas.map((a, i) => `${i + 1}. **${a}**`).join("\n");
+
+  return `# AI Content Strategy — ${brand}
+*Generated ${today()} · Newtation MCP*
+
+## Your Task
+Create a prioritized content plan for **${brand}** in **${industry}**, targeting **${audience}**. Each content recommendation should directly improve how AI models perceive and cite ${brand}.
+
+## Weak Areas to Address
+${areaList}
+
+## For Each Weak Area, Recommend:
+
+### Content Plan
+- **Content type**: What format? (Definitive guide, case study, original research, FAQ, comparison page)
+- **Word count**: How comprehensive should it be?
+- **Publish platform**: Where should it go? (Own blog, industry publication, both)
+- **Target prompt**: What user question should this content answer?
+- **Unique angle**: How can ${brand} differentiate from existing content on this topic?
+- **Priority**: Based on competitive opportunity and ${brand}'s current gaps
+- **Timeline**: Suggested publishing timeframe
+
+### The 3 Rules of AI-Optimized Content
+1. **Answer the exact question** — Write content that mirrors how users actually prompt AI
+2. **Be the definitive source** — Comprehensive, original content gets cited; thin content gets ignored
+3. **Get cited by others** — AI trusts content that other trusted sources reference
+
+## Response Format
+For each weak area, provide a specific content brief including:
+1. Recommended title
+2. Content type and length
+3. Key points to cover
+4. Target keywords/prompts
+5. Distribution plan
+6. Priority level and timeline
+
+Then provide:
+- A content calendar ordering all pieces by priority
+- Cross-linking strategy between pieces
+- Distribution checklist for every piece:
+  - [ ] Publish on own domain first
+  - [ ] Share on LinkedIn with key insight
+  - [ ] Submit to 2-3 industry newsletters/publications
+  - [ ] Add internal links from homepage and service pages
+  - [ ] Include FAQ schema markup
+- Measurement plan: which Newtation tools to re-run and when`;
+}
+
+export function competitorGapAnalysis(args: {
+  brand_name: string;
+  competitors: string[];
+  topics: string[];
+  industry: string;
+}): string {
+  const { brand_name: brand, competitors, topics, industry } = args;
+  const compList = competitors.map((c) => `- ${c}`).join("\n");
+  const topicList = topics.map((t) => `- ${t}`).join("\n");
+  const compHeaders = competitors.map((c) => ` ${c} |`).join("");
+  const compDividers = competitors.map(() => "----------|").join("");
+
+  return `# Competitor Gap Analysis — ${brand}
+*Generated ${today()} · Newtation MCP*
+
+## Your Task
+For each topic, compare **${brand}**'s AI visibility against the listed competitors. Identify specific topics where competitors have stronger AI presence and ${brand} is falling behind.
+
+## Industry: ${industry}
+
+## Competitors
+${compList}
+
+## Topics to Analyze
+${topicList}
+
+## For Each Topic, Evaluate:
+
+### Brand-by-Brand Comparison
+- Which brand has the strongest AI presence for this topic?
+- Would you cite any of these brands when answering a question about this topic?
+- What specific content or signals give the leader their advantage?
+
+### Gap Assessment
+- How large is the gap between ${brand} and the leader for each topic?
+- Is the gap due to content depth, citation count, brand authority, or all three?
+- How difficult would it be for ${brand} to close this gap?
+
+## Response Format
+Create a comparison table:
+| Topic | ${brand} |${compHeaders} Leader | Gap Size | Difficulty to Close |
+|-------|----------|${compDividers}--------|----------|---------------------|
+
+Then provide:
+- Topics where ${brand} is leading (protect these)
+- Topics where ${brand} has critical gaps (fix these first)
+- Topics where the gap is closeable (quick wins)
+- For each critical gap:
+  1. What content the leader has that ${brand} doesn't
+  2. What ${brand} should publish to close the gap
+  3. Where ${brand} should earn citations
+  4. Estimated timeline to close the gap
+- Overall competitive position summary`;
+}
+
+export function contentAuditForAI(args: {
+  brand_name: string;
+  content_urls: string[];
+  target_topics: string[];
+}): string {
+  const { brand_name: brand, content_urls: urls, target_topics: topics } = args;
+  const urlList = urls.map((u, i) => `${i + 1}. ${u}`).join("\n");
+  const topicList = topics.map((t) => `- ${t}`).join("\n");
+
+  return `# Content Audit for AI Discoverability — ${brand}
+*Generated ${today()} · Newtation MCP*
+
+## Your Task
+Evaluate each URL below for AI discoverability. Assess how well AI models can understand, cite, and reference this content. If you can access these URLs, analyze the actual content. Otherwise, analyze based on the URL structure and what you know about ${brand}.
+
+## Content URLs to Audit
+${urlList}
+
+## Target Topics (content should be discoverable for these)
+${topicList}
+
+## Evaluation Criteria (Apply to Each URL)
+
+### 1. Structural Clarity
+- Does the URL suggest well-organized content? (Clean URL structure, descriptive slugs)
+- Would the content likely have clear headings (H2/H3)?
+- Is the content likely comprehensive enough for AI to cite? (1,500+ words for pillar content)
+
+### 2. AI Discoverability Signals
+- Does ${brand} likely use structured data (FAQ, Article, HowTo schema)?
+- Is the content factually dense (specific data, examples, frameworks)?
+- Does the content answer specific questions users ask AI?
+
+### 3. Entity & Brand Signals
+- Does the content clearly identify ${brand} and what it does?
+- Are there consistent brand mentions (not just pronouns)?
+- Does the content link to and from authoritative sources?
+
+### 4. Topic Relevance
+- How well does each URL map to the target topics listed above?
+- Are there topic gaps — topics not covered by any URL?
+
+## Response Format
+Rate each URL:
+| URL | Estimated Grade (A-F) | Strengths | Weaknesses | Priority Fixes |
+|-----|----------------------|-----------|------------|----------------|
+
+Then provide:
+- Overall content health assessment
+- Pages most in need of optimization
+- Topic gaps (target topics not covered by any URL)
+- Universal optimization checklist:
+  - [ ] Add clear H2/H3 headings
+  - [ ] Add FAQ section matching user prompts about ${topics.join(", ")}
+  - [ ] Include specific examples and data
+  - [ ] Add schema markup (FAQ, Article)
+  - [ ] Mention ${brand} explicitly by name
+  - [ ] Expand thin content to 1,500+ words
+  - [ ] Link to authoritative external sources
+
+**Note:** For a more precise audit, the user can provide the actual page content or use a web browsing tool to analyze each URL directly.`;
+}
+
+export function citationOutreachTargets(args: {
+  brand_name: string;
+  industry: string;
+  topics: string[];
+  target_count?: number;
+}): string {
+  const { brand_name: brand, industry, topics, target_count: count = 10 } = args;
+  const topicList = topics.map((t) => `- ${t}`).join("\n");
+
+  return `# Citation Outreach Targets — ${brand}
+*Generated ${today()} · Newtation MCP*
+
+## Your Task
+Identify the top ${count} real, specific websites and publications that **${brand}** should target for backlinks and citations to improve AI visibility in **${industry}**.
+
+## Topics to Build Citations For
+${topicList}
+
+## Target Categories to Cover
+Recommend real sites from each category:
+
+### 1. Industry Publications (Highest Priority)
+- Major ${industry} publications, trade journals, and industry blogs
+- Sites that AI models frequently cite when discussing ${industry}
+
+### 2. News & Analysis
+- Business news sites, analyst publications, and tech press that cover ${industry}
+- Sites where press mentions carry significant AI trust weight
+
+### 3. Review & Comparison Sites
+- G2, Capterra, Trustpilot, or ${industry}-specific review platforms
+- Comparison sites where ${brand} should be listed
+
+### 4. Directories & Databases
+- Industry directories, Crunchbase, Product Hunt, or specialized databases
+- Profiles that reinforce entity signals
+
+### 5. Podcasts & Media
+- ${industry} podcasts, YouTube channels, or newsletters with interview opportunities
+
+## Response Format
+Provide a ranked list of ${count} real websites:
+| Rank | Site | Category | Why Target | Outreach Angle | Priority |
+|------|------|----------|-----------|----------------|----------|
+
+Then provide:
+- Outreach strategy by category (guest post, press pitch, review submission, etc.)
+- A customizable outreach email template
+- Tracking recommendations (pitch date, response, published, link type)
+- Success metrics to aim for (response rates, conversion rates)
+- Timeline expectations
+
+## Why Citations Matter for AI
+When authoritative ${industry} sites mention or link to ${brand}, AI models:
+- Learn to trust ${brand} as a credible source
+- Associate ${brand} with those sites' authority
+- Include ${brand} in responses to related queries
+- Cite ${brand} when discussing ${topics.join(", ")}`;
+}
+
+// ── Summary ──────────────────────────────────────────────────────────────────
+
+export function aiReadinessScorecard(args: {
+  brand_name: string;
+  industry: string;
+  website?: string;
+  competitors?: string[];
+  target_locations?: string[];
+  topics?: string[];
+}): string {
+  const {
+    brand_name: brand,
+    industry,
+    website,
+    competitors = [],
+    target_locations: locations = [],
+    topics = [],
+  } = args;
+
+  const contextParts: string[] = [];
+  if (website) contextParts.push(`- Website: ${website}`);
+  if (competitors.length > 0) contextParts.push(`- Competitors: ${competitors.join(", ")}`);
+  if (locations.length > 0) contextParts.push(`- Target locations: ${locations.join(", ")}`);
+  if (topics.length > 0) contextParts.push(`- Key topics: ${topics.join(", ")}`);
+
+  return `# AI Readiness Scorecard — ${brand}
+*Generated ${today()} · Newtation MCP*
+
+## Your Task
+Provide a comprehensive AI readiness assessment for **${brand}** in **${industry}**, scoring across all key dimensions. This is the master audit — be thorough and honest.
+${contextParts.length > 0 ? `\n## Context\n${contextParts.join("\n")}\n` : ""}
+## Score Each Dimension
+
+### 1. AI Perception (Weight: 20%)
+How well do AI models know and describe ${brand}?
+- Brand recognition, description accuracy, recommendation likelihood
+
+### 2. Entity Clarity (Weight: 20%)
+How clearly does AI understand what ${brand} is?
+- Identity resolution, attribute completeness, description consistency
+
+### 3. Citation Strength (Weight: 20%)
+${topics.length > 0 ? `Would AI cite ${brand} for: ${topics.join(", ")}?` : `Does AI cite ${brand} as an authority in ${industry}?`}
+- Citation likelihood, source authority, content depth
+
+### 4. Competitive Position (Weight: 15%)
+${competitors.length > 0 ? `How does ${brand} compare to ${competitors.join(", ")}?` : `How does ${brand} stack up against competitors in ${industry}?`}
+- Mindshare ranking, differentiation, gap assessment
+
+### 5. Geographic Reach (Weight: 10%)
+${locations.length > 0 ? `Would AI recommend ${brand} in: ${locations.join(", ")}?` : `Does ${brand} have geographic-specific AI presence?`}
+- Location-specific recommendations, local signal strength
+
+### 6. Sentiment (Weight: 15%)
+What tone does AI use when discussing ${brand}?
+- Overall sentiment, aspect-by-aspect analysis, confidence level
+
+## Response Format
+
+### Scorecard Table
+| Dimension | Rating (Strong/Moderate/Weak/Unknown) | Key Finding |
+|-----------|--------------------------------------|-------------|
+
+### Overall Assessment
+- Overall AI readiness: **Grade (A-F)** with explanation
+- Grade scale: A (Leader) / B (Strong) / C (Average) / D (Below Average) / F (Invisible)
+
+### Top 3 Priority Actions
+Based on the weakest dimensions, provide:
+1. The single most impactful action to take this week
+2. The highest-priority content to create
+3. The most important external citation to earn
+
+### Recommended Audit Sequence
+Based on findings, recommend which Newtation tools to run next:
+1. \`brand_perception_audit\` — Deep dive into AI perception
+2. \`entity_clarity_score\` — Fix identity confusion
+3. \`citation_check\` — Map citation gaps
+4. \`competitor_comparison\` — Competitive benchmarking
+5. \`competitor_gap_analysis\` — Topic-level competitive gaps
+6. \`prompt_vulnerability_scan\` — Find dangerous queries
+7. \`sentiment_analysis\` — Tone analysis
+8. \`content_audit_for_ai\` — Score existing content
+9. \`content_strategy_generator\` — Plan new content
+10. \`citation_outreach_targets\` — Build citation network`;
+}
+
+// ── Generators ───────────────────────────────────────────────────────────────
+
+export function generateAuditQueries(args: {
+  brand_name: string;
+  industry: string;
+  focus_areas?: string[];
+  competitor_names?: string[];
+}): string {
+  const {
+    brand_name: brand,
+    industry,
+    focus_areas: areas = [],
+    competitor_names: competitors = [],
+  } = args;
+
+  const year = new Date().getFullYear();
+
+  // Actually generate queries algorithmically — this is what the tool DOES.
+  // The LLM could brainstorm queries, but this produces a systematic,
+  // comprehensive, categorized set mapped to the right follow-up tools.
+  const queries: { query: string; category: string; tool: string }[] = [];
+
+  // Discovery
+  queries.push(
+    { query: `best ${industry} companies`, category: "Discovery", tool: "prompt_vulnerability_scan" },
+    { query: `top ${industry} solutions ${year}`, category: "Discovery", tool: "prompt_vulnerability_scan" },
+    { query: `best ${industry} tools`, category: "Discovery", tool: "prompt_vulnerability_scan" },
+    { query: `${industry} recommendations`, category: "Discovery", tool: "prompt_vulnerability_scan" },
+    { query: `who is the leader in ${industry}`, category: "Discovery", tool: "prompt_vulnerability_scan" },
+    { query: `${industry} market leaders ${year}`, category: "Discovery", tool: "prompt_vulnerability_scan" },
+  );
+
+  // Comparison
+  for (const comp of competitors) {
+    queries.push(
+      { query: `${brand} vs ${comp}`, category: "Comparison", tool: "competitor_comparison" },
+      { query: `${comp} alternatives`, category: "Comparison", tool: "competitor_comparison" },
+    );
+  }
+  queries.push(
+    { query: `${brand} alternatives`, category: "Comparison", tool: "competitor_comparison" },
+    { query: `compare ${industry} solutions`, category: "Comparison", tool: "competitor_comparison" },
+  );
+
+  // Reputation
+  queries.push(
+    { query: `is ${brand} good`, category: "Reputation", tool: "sentiment_analysis" },
+    { query: `${brand} reviews`, category: "Reputation", tool: "sentiment_analysis" },
+    { query: `should I use ${brand}`, category: "Reputation", tool: "sentiment_analysis" },
+    { query: `${brand} pros and cons`, category: "Reputation", tool: "sentiment_analysis" },
+  );
+
+  // Knowledge
+  queries.push(
+    { query: `what does ${brand} do`, category: "Knowledge", tool: "entity_clarity_score" },
+    { query: `what is ${brand}`, category: "Knowledge", tool: "entity_clarity_score" },
+    { query: `who founded ${brand}`, category: "Knowledge", tool: "entity_clarity_score" },
+    { query: `how does ${brand} work`, category: "Knowledge", tool: "entity_clarity_score" },
+  );
+
+  // Use-case
+  for (const area of areas) {
+    queries.push(
+      { query: `best ${industry} for ${area}`, category: "Use-Case", tool: "citation_check" },
+      { query: `how to improve ${area}`, category: "Use-Case", tool: "citation_check" },
+    );
+  }
+  if (areas.length === 0) {
+    queries.push(
+      { query: `${industry} for small business`, category: "Use-Case", tool: "citation_check" },
+      { query: `${industry} for enterprise`, category: "Use-Case", tool: "citation_check" },
+      { query: `${industry} for startups`, category: "Use-Case", tool: "citation_check" },
+    );
+  }
+
+  // Geographic
+  const cities = ["New York", "London", "San Francisco", "Toronto", "Sydney"];
+  for (const city of cities.slice(0, 3)) {
+    queries.push(
+      { query: `best ${industry} in ${city}`, category: "Geographic", tool: "geo_recommendations" },
+    );
+  }
+
+  // Build table
+  const rows = queries
+    .map((q, i) => `| ${i + 1} | ${q.query} | ${q.category} | \`${q.tool}\` |`)
+    .join("\n");
+
+  const cats = ["Discovery", "Comparison", "Reputation", "Knowledge", "Use-Case", "Geographic"];
+  const counts = cats
+    .map((c) => `- **${c}**: ${queries.filter((q) => q.category === c).length} queries`)
+    .join("\n");
+
+  return `# AI Audit Queries — ${brand}
+*Generated ${today()} · Newtation MCP · ${queries.length} queries generated*
+
+## Generated Query Set
+
+| # | Query | Category | Best Newtation Tool |
+|---|-------|----------|---------------------|
+${rows}
+
+## Summary by Category
+${counts}
+
+## Your Task
+Using the ${queries.length} generated queries above:
+1. **Prioritize** the top 10 most relevant to ${brand}'s business goals
+2. **Test each** in ChatGPT, Claude, Perplexity, and Gemini
+3. **Record results**: Was ${brand} mentioned? Position? Tone? Who appeared instead?
+4. **Identify patterns**: Which categories are strongest/weakest?
+5. **Run deeper analysis**: Use the "Best Newtation Tool" column for follow-up
+
+## Testing Protocol
+- [ ] Test top 10 queries across all 4 major AI models
+- [ ] Score each: mentioned favorably | mentioned weakly | not mentioned | competitor mentioned instead
+- [ ] Screenshot or record each response as a baseline
+- [ ] Re-test in 30 days after implementing fixes
+- [ ] Focus content strategy on queries where ${brand} is absent or weak
+
+## Next Steps by Result
+- **Not mentioned at all** → Run \`content_strategy_generator\` for those topics
+- **Mentioned but weak** → Run \`prompt_vulnerability_scan\` with those queries
+- **Competitor dominates** → Run \`competitor_gap_analysis\` on those topics
+- **Mentioned favorably** → Protect with \`citation_check\` to maintain position`;
+}
+
+// ── Diagnostics (additional) ─────────────────────────────────────────────────
+
+export function hallucinationCheck(args: {
+  brand_name: string;
+  ai_response: string;
+  known_facts?: string[];
+}): string {
+  const { brand_name: brand, ai_response: response, known_facts: facts = [] } = args;
+  const factSection =
+    facts.length > 0
+      ? facts.map((f, i) => `${i + 1}. ${f}`).join("\n")
+      : "_No known facts provided — use your own knowledge and be explicit about uncertainty._";
+
+  const crossRef =
+    facts.length > 0
+      ? "\nCross-reference each claim against the known facts above."
+      : "";
+
+  return `# Hallucination Check — ${brand}
+*Generated ${today()} · Newtation MCP*
+
+## Your Task
+Fact-check the following AI-generated text about **${brand}**. Identify any claims that are false, unverifiable, outdated, or misleading. Be rigorous — hallucinated facts damage brand trust and spread across models.
+
+## AI Response to Verify
+> ${response}
+
+## Known Facts (Ground Truth)
+${factSection}
+
+## Verification Process
+
+### Step 1: Extract Every Factual Claim
+List each factual claim made about ${brand} in the response above:
+- Company descriptions and categorizations
+- Product/service claims
+- Founding date, location, team size
+- Customer claims, metrics, case studies
+- Competitive positioning statements
+- Awards, recognition, partnerships
+
+### Step 2: Verify Each Claim
+For each extracted claim, assign a status:
+- **Verified**: You have strong evidence this is true
+- **Likely True**: Consistent with your knowledge, but not fully confirmed
+- **Unverifiable**: Not enough information to confirm or deny
+- **Likely False**: Contradicts what you know
+- **Hallucinated**: Definitely false or fabricated${crossRef}
+
+### Step 3: Assess Severity
+For each problematic claim, rate severity:
+- **Critical**: Could cause real harm (wrong product claims, false partnerships, incorrect pricing)
+- **Moderate**: Misleading but not directly harmful (inflated descriptions, vague exaggerations)
+- **Minor**: Small inaccuracies unlikely to cause damage
+
+## Response Format
+
+| # | Claim | Status | Confidence | Severity | Evidence |
+|---|-------|--------|------------|----------|----------|
+
+Then provide:
+- **Hallucination rate**: X of Y claims are problematic
+- **Overall reliability**: High / Moderate / Low / Unreliable
+- **Most dangerous claim**: The single worst hallucination and why it matters
+- **Corrected text**: Rewrite the response with all hallucinations fixed
+- **Prevention checklist**:
+  1. Publish an authoritative About page with explicit, machine-readable facts
+  2. Add Organization schema markup with verified attributes
+  3. Maintain consistent facts across all web properties
+  4. Create a press/media page with verified milestones and stats
+  5. Run \`schema_markup_generator\` to create machine-readable identity
+  6. Re-run this check monthly to catch new hallucinations`;
+}
+
+// ── Technical Output ─────────────────────────────────────────────────────────
+
+export function schemaMarkupGenerator(args: {
+  brand_name: string;
+  url: string;
+  description: string;
+  type?: string;
+  founding_year?: string;
+  founders?: string[];
+  social_urls?: string[];
+}): string {
+  const {
+    brand_name: brand,
+    url,
+    description,
+    type = "Organization",
+    founding_year: year,
+    founders = [],
+    social_urls: socials = [],
+  } = args;
+
+  // Actually build JSON-LD objects — this is real code generation, not a prompt.
+  const org: Record<string, unknown> = {
+    "@context": "https://schema.org",
+    "@type": type,
+    "@id": `${url}/#organization`,
+    name: brand,
+    url,
+    description: description.slice(0, 300),
+    logo: { "@type": "ImageObject", url: `${url}/logo.png` },
+  };
+  if (year) org.foundingDate = year;
+  if (founders.length > 0) {
+    org.founder = founders.map((f) => ({ "@type": "Person", name: f }));
+  }
+  if (socials.length > 0) org.sameAs = socials;
+
+  const site = {
+    "@context": "https://schema.org",
+    "@type": "WebSite",
+    name: brand,
+    url,
+    publisher: { "@id": `${url}/#organization` },
+  };
+
+  const breadcrumb = {
+    "@context": "https://schema.org",
+    "@type": "BreadcrumbList",
+    itemListElement: [
+      { "@type": "ListItem", position: 1, name: "Home", item: url },
+      {
+        "@type": "ListItem",
+        position: 2,
+        name: "TODO: Primary Category",
+        item: `${url}/TODO`,
+      },
+    ],
+  };
+
+  const orgJSON = JSON.stringify(org, null, 2);
+  const siteJSON = JSON.stringify(site, null, 2);
+  const breadcrumbJSON = JSON.stringify(breadcrumb, null, 2);
+  const fence = "```";
+  const descEscaped = description.replace(/"/g, '\\"');
+
+  return `# Schema Markup — ${brand}
+*Generated ${today()} · Newtation MCP*
+
+Paste-ready JSON-LD for your website's \`<head>\`. Generated from your inputs — review, customize, and deploy.
+
+---
+
+## 1. Organization Schema
+
+${fence}html
+<script type="application/ld+json">
+${orgJSON}
+</script>
+${fence}
+
+**Review**: Replace \`logo.png\` with your actual logo path.${year ? "" : " Add \`foundingDate\` if known."}${socials.length > 0 ? "" : " Add \`sameAs\` with social profile URLs."}
+
+---
+
+## 2. WebSite Schema
+
+${fence}html
+<script type="application/ld+json">
+${siteJSON}
+</script>
+${fence}
+
+---
+
+## 3. BreadcrumbList Schema
+
+${fence}html
+<script type="application/ld+json">
+${breadcrumbJSON}
+</script>
+${fence}
+
+**Review**: Replace the \`TODO\` values with your actual primary service category and URL.
+
+---
+
+## 4. FAQ Schema (Generate This Next)
+
+### Your Task
+Generate a FAQPage schema block with 5-8 Q&A entries for **${brand}**. Use this starter:
+
+${fence}html
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "FAQPage",
+  "mainEntity": [
+    {
+      "@type": "Question",
+      "name": "What does ${brand} do?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "${descEscaped}"
+      }
+    }
+  ]
+}
+</script>
+${fence}
+
+Add 4-7 more Q&A pairs covering:
+- Who is ${brand} for? (target audience)
+- How is ${brand} different from competitors?
+- How does ${brand} work?
+- What does ${brand} cost?
+- How do I get started with ${brand}?
+
+Each answer should be factual and specific — AI models extract FAQ content for training data.
+
+---
+
+## Validation Checklist
+- [ ] Paste each block into [Google Rich Results Test](https://search.google.com/test/rich-results)
+- [ ] Validate at [Schema.org Validator](https://validator.schema.org/)
+- [ ] Replace \`logo.png\` with actual logo path
+- [ ] Replace all \`TODO:\` placeholders
+- [ ] Verify all URLs are correct and live
+- [ ] Deploy to every page's \`<head>\` (at minimum: homepage)
+- [ ] Request re-indexing via Google Search Console
+
+## Why This Matters
+Schema markup is the most direct way to tell AI models who you are:
+- **Organization schema** creates a canonical machine-readable identity
+- **FAQ schema** feeds directly into AI training pipelines and featured snippets
+- **WebSite schema** establishes your domain as an authoritative source
+- This is the single highest-ROI technical fix for AI visibility`;
+}
