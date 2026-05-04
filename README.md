@@ -10,7 +10,10 @@
 
 ## Description
 
-Newtation is an AI presence management platform that helps brands understand and improve how AI models talk about them. It connects to Claude as a remote MCP server and provides **15 read-only auditing tools** and **4 prompt workflows** — covering perception, citations, competitive positioning, sentiment, hallucination detection, schema markup generation, and more.
+Newtation is an AI presence management platform that helps brands understand and improve how AI models talk about them. The codebase currently ships two MCP server modes:
+
+- **Remote (Cloudflare Workers, `src/`)**: **12 read-only auditing tools** over Streamable HTTP + GitHub OAuth
+- **Local (Python stdio, `server.py`)**: **15 read-only auditing tools** + **4 prompt workflows**
 
 All tools are **read-only**. They combine two approaches:
 1. **Structured analysis frameworks** the LLM fills in using its actual training-data knowledge
@@ -22,13 +25,13 @@ All tools are **read-only**. They combine two approaches:
 
 - **Full AI Brand Audit** — Score your brand across 6 dimensions: perception, entity clarity, citations, competitive position, geographic reach, and sentiment
 - **Competitive Intelligence** — See exactly which topics competitors are beating you on in AI responses, with gap analysis and priority actions
-- **Hallucination Detection** — Paste any AI-generated text about your brand and get a claim-by-claim fact-check with severity ratings
-- **Schema Markup Generator** — Generate paste-ready JSON-LD (Organization, WebSite, FAQ, BreadcrumbList) optimized for AI discoverability
-- **Audit Query Generator** — Auto-generate 30+ categorized test queries mapped to the right follow-up tools
+- **Hallucination Detection (Local mode)** — Paste any AI-generated text about your brand and get a claim-by-claim fact-check with severity ratings
+- **Schema Markup Generator (Local mode)** — Generate paste-ready JSON-LD (Organization, WebSite, FAQ, BreadcrumbList) optimized for AI discoverability
+- **Audit Query Generator (Local mode)** — Auto-generate 30+ categorized test queries mapped to the right follow-up tools
 - **Citation Mapping** — Check whether AI cites your brand for specific topics, and get a prioritized outreach list of high-authority sites
 - **Content Scoring** — Audit existing pages and score them for AI discoverability (A-F grades with optimization checklists)
 - **Prompt Vulnerability Detection** — Test specific prompts users might ask and find where AI gives wrong, weak, or competitor-favoring answers
-- **4 Prompt Workflows** — Pre-built multi-tool workflows: Full Brand Audit, Quick Health Check, Competitive Deep Dive, Fix My AI Presence
+- **4 Prompt Workflows (Local mode)** — Pre-built multi-tool workflows: Full Brand Audit, Quick Health Check, Competitive Deep Dive, Fix My AI Presence
 
 ---
 
@@ -39,7 +42,7 @@ All tools are **read-only**. They combine two approaches:
 1. Visit the [Anthropic MCP Directory](https://claude.ai/connectors)
 2. Find and connect **Newtation**
 3. Complete GitHub OAuth authentication
-4. Start using any of the 15 tools by asking Claude naturally
+4. Start using any of the 12 remote tools by asking Claude naturally
 
 ### Connect from Claude Desktop
 
@@ -71,6 +74,8 @@ claude mcp add newtation -- python3 $(pwd)/server.py
 
 Verify: `claude mcp list`
 
+This local mode exposes all 15 tools and all 4 prompt workflows.
+
 ---
 
 ## Authentication
@@ -91,7 +96,8 @@ This server uses **GitHub OAuth 2.0** for remote connections.
 
 ## Tools
 
-15 read-only tools organized into 5 categories:
+The server supports **15 read-only tools total in local mode**.  
+The **remote Cloudflare Workers server exposes 12 tools** (all except the 3 tools marked **Local only** below).
 
 ### Core Audit
 | Tool | Purpose |
@@ -107,7 +113,7 @@ This server uses **GitHub OAuth 2.0** for remote connections.
 |------|---------|
 | `prompt_vulnerability_scan` | Finds prompts where AI gives wrong, weak, or competitor-favoring answers |
 | `sentiment_analysis` | Breaks down AI's likely tone across brand aspects (quality, pricing, service, etc.) |
-| `hallucination_check` | Paste AI-generated text → get claim-by-claim fact-check with severity ratings |
+| `hallucination_check` | Paste AI-generated text → get claim-by-claim fact-check with severity ratings (**Local only**) |
 
 ### Strategy & Output
 | Tool | Purpose |
@@ -116,12 +122,12 @@ This server uses **GitHub OAuth 2.0** for remote connections.
 | `competitor_gap_analysis` | Topic-by-topic scoring of where competitors lead in AI visibility |
 | `content_audit_for_ai` | Grades existing content (A-F) for AI discoverability |
 | `citation_outreach_targets` | Ranked list of high-authority sites to target for backlinks and citations |
-| `schema_markup_generator` | Generates paste-ready JSON-LD (Organization, WebSite, FAQ, BreadcrumbList) |
+| `schema_markup_generator` | Generates paste-ready JSON-LD (Organization, WebSite, FAQ, BreadcrumbList) (**Local only**) |
 
 ### Generators
 | Tool | Purpose |
 |------|---------|
-| `generate_audit_queries` | Auto-generates 30+ categorized test queries with tool mapping and testing protocol |
+| `generate_audit_queries` | Auto-generates 30+ categorized test queries with tool mapping and testing protocol (**Local only**) |
 
 ### Summary
 | Tool | Purpose |
@@ -132,7 +138,7 @@ This server uses **GitHub OAuth 2.0** for remote connections.
 
 ## Prompt Workflows
 
-4 pre-built multi-tool workflows that appear in Claude's prompt selector:
+4 pre-built multi-tool workflows are implemented in the local Python stdio server (`server.py`) and appear in Claude's prompt selector when using local mode:
 
 | Workflow | What It Does |
 |----------|-------------|
@@ -242,7 +248,7 @@ Generate a content strategy for Acme Corp targeting weak areas: "workflow automa
 See our full privacy policy at: [https://newtationco.app/privacy](https://newtationco.app/privacy)
 
 **Summary:**
-- All 15 tools are **read-only** — they generate reports, never modify external data
+- All tools are **read-only** — they generate reports, never modify external data
 - OAuth tokens stored in Cloudflare KV with 7-day expiration
 - Tool results are generated on-demand and not persisted
 - No conversation data, analytics, or tracking collected
@@ -335,7 +341,7 @@ Server URL: `https://newtation-mcp.<your-subdomain>.workers.dev/mcp`
 newtation-mcp/
 ├── src/
 │   ├── index.ts               # MCP server + OAuth (Cloudflare Workers)
-│   ├── tools.ts               # 15 brand auditing tools (TypeScript)
+│   ├── tools.ts               # 12 brand auditing tools (TypeScript, remote mode)
 │   ├── github-handler.ts      # GitHub OAuth flow
 │   ├── utils.ts               # OAuth helpers
 │   └── workers-oauth-utils.ts # CSRF, state, approval dialog
