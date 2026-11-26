@@ -1,0 +1,37 @@
+runtime: "remote"
+
+remote:
+  url: "https://mcp.newtation.ai/mcp"
+  transport: "streamable-http"
+
+metadata:
+  name: "Newtation"
+  displayName: "Newtation — AI SEO"
+  description: "Free AI SEO toolkit: check whether ChatGPT, Claude, Perplexity and Google AI Overviews can crawl, read and cite your site (18 AI bots, site-wide audit, citability, Wikidata, Common Crawl), measure AI share of voice vs competitors, and get paste-ready robots.txt, JSON-LD and llms.txt fixes. No sign-in."
+  homepage: "https://newtation.ai"
+  repository: "https://github.com/Newtation/newtation-mcp"
+  issues: "https://github.com/Newtation/newtation-mcp/issues"
+  privacyPolicy: "https://newtation.ai/privacy"
+  supportEmail: "contact@newtation.ai"
+  license: "MIT"
+  categories:
+    - "marketing"
+    - "seo"
+    - "analytics"
+    - "monitoring"
+  tags:
+    - "ai-seo"
+    - "geo"
+    - "aeo"
+    - "ai-visibility"
+    - "ai-crawlers"
+    - "generative-engine-optimization"
+    - "brand-monitoring"
+    - "hallucination-detection"
+    - "schema-markup"
+    - "llms-txt"
+  publisher:
+    name: "Newtation"
+    url: "https://newtation.ai"
+
+exampleConfig: {}

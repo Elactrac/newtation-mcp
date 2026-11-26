@@ -1,0 +1,11 @@
+{
+  "name": "newtation-ai-seo",
+  "displayName": "Newtation AI SEO",
+  "version": "1.0.0",
+  "description": "AI SEO for any website: check whether ChatGPT, Claude, Perplexity, Gemini and Google AI Overviews can crawl, read and cite your site, test what AI believes about your brand, catch hallucinations, and get paste-ready fixes (robots.txt, schema markup, llms.txt).",
+  "author": { "name": "Newtation", "url": "https://newtation.ai" },
+  "homepage": "https://newtation.ai",
+  "repository": "https://github.com/Newtation/newtation-mcp",
+  "license": "MIT",
+  "keywords": ["ai-seo", "geo", "aeo", "generative-engine-optimization", "ai-visibility", "llms-txt", "schema-markup", "seo"]
+}

@@ -1,0 +1,51 @@
+{
+  "name": "newtation-mcp",
+  "version": "3.1.0",
+  "private": true,
+  "description": "Newtation MCP — free AI SEO (GEO/AEO) tools: check whether ChatGPT, Claude, Perplexity and Google AI Overviews can crawl, read and cite a site, test what AI believes about a brand, and generate robots.txt, schema and llms.txt fixes.",
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "claude",
+    "anthropic",
+    "ai-seo",
+    "geo",
+    "aeo",
+    "ai-visibility",
+    "generative-engine-optimization",
+    "brand-monitoring",
+    "hallucination-detection",
+    "schema-markup",
+    "llms-txt",
+    "seo",
+    "cloudflare-workers"
+  ],
+  "homepage": "https://newtation.ai",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Newtation/newtation-mcp.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Newtation/newtation-mcp/issues"
+  },
+  "author": "Newtation (https://newtation.ai)",
+  "license": "MIT",
+  "scripts": {
+    "deploy": "wrangler deploy",
+    "dev": "wrangler dev",
+    "start": "wrangler dev",
+    "cf-typegen": "wrangler types",
+    "type-check": "tsc --noEmit",
+    "test": "esbuild scripts/test-crawler-access.ts scripts/test-ai-seo-tools.ts --bundle --platform=node --format=esm --outdir=.test-build --log-level=warning && node .test-build/test-crawler-access.js && node .test-build/test-ai-seo-tools.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.26.0",
+    "agents": "^0.5.0",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20260227.0",
+    "typescript": "5.9.3",
+    "wrangler": "^4.67.0"
+  }
+}

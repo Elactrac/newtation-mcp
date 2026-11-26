@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "newtation": {
+      "type": "http",
+      "url": "https://mcp.newtation.ai/mcp"
+    }
+  }
+}

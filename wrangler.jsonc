@@ -1,0 +1,41 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "newtation-mcp",
+  "main": "src/index.ts",
+  "compatibility_date": "2025-03-10",
+  "compatibility_flags": ["nodejs_compat"],
+
+  // Public endpoint on the brand's own domain (required for the Claude connector directory).
+  // The zone newtation.ai must be in the same Cloudflare account. workers.dev stays live.
+  "routes": [{ "pattern": "mcp.newtation.ai", "custom_domain": true }],
+  "workers_dev": true,
+
+  // Durable Objects for stateful MCP sessions
+  "migrations": [
+    {
+      "new_sqlite_classes": ["NewtationMCP"],
+      "tag": "v1"
+    }
+  ],
+  "durable_objects": {
+    "bindings": [
+      {
+        "class_name": "NewtationMCP",
+        "name": "MCP_OBJECT"
+      }
+    ]
+  },
+
+  // Caps tool calls per audited site (30 a minute) so the server can't be used to hammer one site.
+  "ratelimits": [
+    { "name": "TARGET_RATE_LIMITER", "namespace_id": "1001", "simple": { "limit": 30, "period": 60 } }
+  ],
+
+  "observability": {
+    "enabled": true
+  },
+
+  "dev": {
+    "port": 8788
+  }
+}
